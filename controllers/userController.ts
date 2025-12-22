@@ -38,6 +38,7 @@ export const getAllUsers = async (req: Request, res: Response) => {
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
+        { gibyGubayeId: { $regex: search, $options: 'i' } },
         { email: { $regex: search, $options: 'i' } },
         { phone: { $regex: search, $options: 'i' } },
       ];
@@ -113,7 +114,7 @@ export const getUser = async (req: Request, res: Response) => {
 // Create new user
 export const createUser = async (req: Request, res: Response) => {
   try {
-    const { name, email, phone, background, studentId, password, role } = req.body;
+    const {name, email, phone, background, studentId, password, role } = req.body;
 
     // Validate student exists
     const student = await Student.findById(studentId);
@@ -138,8 +139,10 @@ export const createUser = async (req: Request, res: Response) => {
       });
     }
 
+    const gibyGubayeId = student.gibyGubayeId;
     // Create new user
     const user = new User({
+      gibyGubayeId,
       name,
       email,
       phone,

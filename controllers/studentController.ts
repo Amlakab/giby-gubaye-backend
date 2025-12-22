@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import Student, { IStudent } from '../models/Student';
+import { generateStudentId } from '../utils/generateStudentId';
 import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
@@ -40,6 +41,7 @@ export const getAllStudents = async (req: Request, res: Response) => {
     
     if (search) {
       filter.$or = [
+        { gibyGubayeId: { $regex: search, $options: 'i' } },
         { firstName: { $regex: search, $options: 'i' } },
         { lastName: { $regex: search, $options: 'i' } },
         { email: { $regex: search, $options: 'i' } },
@@ -97,21 +99,39 @@ export const getAllStudents = async (req: Request, res: Response) => {
 };
 
 // Get single student
+// Get single student - UPDATED to handle both MongoDB ID and gibyGubayeId (case-sensitive)
 export const getStudent = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return errorResponse(res, 'Invalid student ID', 400);
+    if (!id) {
+      return errorResponse(res, 'Student identifier is required', 400);
     }
 
-    const student = await Student.findById(id);
+    let student = null;
+
+    // Check if the ID is a valid MongoDB ObjectId (24-character hex string)
+     // Check if the ID is a valid MongoDB ObjectId
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      // Try to find by MongoDB _id first
+      student = await Student.findById(id);
+    }
+    
+    // If not found by _id or not a valid ObjectId, try by gibyGubayeId (CASE-SENSITIVE)
+    if (!student) {
+      // Search by gibyGubayeId with EXACT CASE-SENSITIVE match
+      student = await Student.findOne({ 
+        gibyGubayeId: id // No regex, exact case-sensitive match
+      });
+    }
+
     if (!student) {
       return errorResponse(res, 'Student not found', 404);
     }
 
     successResponse(res, student, 'Student retrieved successfully');
   } catch (error: any) {
+    console.error('Error fetching student:', error);
     errorResponse(res, error.message, 500);
   }
 };
@@ -175,8 +195,12 @@ export const createStudent = async (req: Request, res: Response) => {
         additionalLanguagesArray = additionalLanguages;
       }
     }
+    
+    // Generate student ID
+    const gibyGubayeId = await generateStudentId(batch);
 
     const newStudent = new Student({
+      gibyGubayeId,
       firstName,
       middleName,
       lastName,

@@ -1,6 +1,7 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
 export interface IStudent extends Document {
+  gibyGubayeId: string;
   firstName: string;
   middleName?: string;
   lastName: string;
@@ -36,6 +37,13 @@ export interface IStudent extends Document {
 }
 
 const studentSchema = new Schema<IStudent>({
+  gibyGubayeId: {
+  type: String,
+  unique: true,
+  required: true,
+  index: true
+},
+
   firstName: {
     type: String,
     required: [true, 'First name is required'],

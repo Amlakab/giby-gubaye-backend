@@ -10,6 +10,8 @@ import agentRoutes from './routes/agent';
 import userRoutes from './routes/user';
 import studentRoutes from './routes/studentRoutes';
 import jobRoutes from './routes/jobRoutes';
+import blogRoutes from './routes/blogRoutes';
+import agendaRoutes from './routes/agendaRoutes';
 import feedbackRoutes from './routes/feedback';
 import { connectDB } from './config/database';
 import { errorHandler } from './middleware/errorHandler';
@@ -77,7 +79,7 @@ createUploadsDirectory();
 // Use the same path that studentRoutes.ts uses
 const uploadsPath = path.join(process.cwd(), 'public', 'uploads');
 app.use('/uploads', express.static(uploadsPath));
-
+app.use('/uploads/blogs', express.static(path.join(__dirname, '..', 'public', 'uploads', 'blogs')));
 // Debug middleware for static files (optional - remove in production)
 app.use('/uploads', (req, res, next) => {
   console.log(`📁 Static file request: ${req.url}`);
@@ -88,7 +90,9 @@ app.use('/uploads', (req, res, next) => {
 // Routes
 app.use('/api/user', userRoutes);
 app.use('/api/students', studentRoutes);
+app.use('/api/blogs', blogRoutes);
 app.use('/api/jobs', jobRoutes);
+app.use('/api/agendas', agendaRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/agent', agentRoutes);
 app.use('/api/feedback', feedbackRoutes);

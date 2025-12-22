@@ -71,7 +71,7 @@ router.get('/filter-options', getFilterOptions);
 router.get('/', authenticate, getAllStudents);
 router.get('/stats', authenticate, getStudentStatistics);
 router.get('/:id', authenticate, getStudent);
-router.post('/', authenticate, upload.single('photo'), createStudent);
+router.post('/', upload.single('photo'), createStudent);
 router.put('/:id', authenticate, upload.single('photo'), updateStudent);
 router.patch('/:id/status', authenticate, updateStudentStatus);
 router.delete('/:id', authenticate, deleteStudent);

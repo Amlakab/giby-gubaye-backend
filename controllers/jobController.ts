@@ -53,6 +53,7 @@ export const getJobs = async (req: Request, res: Response) => {
           { lastName: { $regex: search, $options: 'i' } },
           { phone: { $regex: search, $options: 'i' } },
           { email: { $regex: search, $options: 'i' } },
+          { gibyGubayeId: { $regex: search, $options: 'i' } },
         ],
       }).select('_id');
 
@@ -126,6 +127,7 @@ export const getEligibleStudents = async (req: Request, res: Response) => {
         { lastName: { $regex: search, $options: 'i' } },
         { phone: { $regex: search, $options: 'i' } },
         { email: { $regex: search, $options: 'i' } },
+        { gibyGubayeId: { $regex: search, $options: 'i' } },
       ];
     }
 
