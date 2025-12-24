@@ -15,10 +15,10 @@ export interface IAgendaTitle {
 export interface IAgenda extends Document {
   meetingClass: string;
   location: string;
-  draftContributors: mongoose.Types.ObjectId[];
+  draftContributors: mongoose.Types.ObjectId[]; // Changed: Student references
   agendaTitles: IAgendaTitle[];
   generalMeetingSummary?: string;
-  meetingContributors: mongoose.Types.ObjectId[];
+  meetingContributors: mongoose.Types.ObjectId[]; // Changed: Student references
   
   // Status fields
   status: 'draft' | 'pending' | 'approved' | 'completed';
@@ -26,8 +26,8 @@ export interface IAgenda extends Document {
   meetingDate?: Date;
   
   // User references
-  createdBy: mongoose.Types.ObjectId;
-  approvedBy?: mongoose.Types.ObjectId;
+  createdBy: mongoose.Types.ObjectId; // User reference
+  approvedBy?: mongoose.Types.ObjectId; // User reference
   
   // Timestamps
   createdAt: Date;
@@ -81,7 +81,7 @@ const agendaSchema = new Schema<IAgenda>({
   },
   draftContributors: [{
     type: Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'Student', // Changed from 'User' to 'Student'
     required: true
   }],
   agendaTitles: {
@@ -100,7 +100,7 @@ const agendaSchema = new Schema<IAgenda>({
   },
   meetingContributors: [{
     type: Schema.Types.ObjectId,
-    ref: 'User'
+    ref: 'Student' // Changed from 'User' to 'Student'
   }],
   
   // Status fields
@@ -117,7 +117,7 @@ const agendaSchema = new Schema<IAgenda>({
     type: Date
   },
   
-  // User references
+  // User references (remain as User)
   createdBy: {
     type: Schema.Types.ObjectId,
     ref: 'User',
@@ -145,7 +145,8 @@ agendaSchema.virtual('creator', {
   ref: 'User',
   localField: 'createdBy',
   foreignField: '_id',
-  justOne: true
+  justOne: true,
+  options: { select: 'firstName lastName email role' }
 });
 
 // Virtual for approver information
@@ -153,21 +154,24 @@ agendaSchema.virtual('approver', {
   ref: 'User',
   localField: 'approvedBy',
   foreignField: '_id',
-  justOne: true
+  justOne: true,
+  options: { select: 'firstName lastName email role' }
 });
 
 // Virtual for draft contributors details
 agendaSchema.virtual('draftContributorsDetails', {
-  ref: 'User',
+  ref: 'Student',
   localField: 'draftContributors',
-  foreignField: '_id'
+  foreignField: '_id',
+  options: { select: 'firstName middleName lastName gender gibyGubayeId phone email' }
 });
 
 // Virtual for meeting contributors details
 agendaSchema.virtual('meetingContributorsDetails', {
-  ref: 'User',
+  ref: 'Student',
   localField: 'meetingContributors',
-  foreignField: '_id'
+  foreignField: '_id',
+  options: { select: 'firstName middleName lastName gender gibyGubayeId phone email' }
 });
 
 // Pre-save middleware

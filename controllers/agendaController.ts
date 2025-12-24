@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import Agenda, { IAgenda, IAgendaDiscussion, IAgendaTitle } from '../models/Agenda';
 import User from '../models/User';
+import Student from '../models/Student';
 import mongoose from 'mongoose';
 
 // Helper functions
@@ -29,6 +30,8 @@ export const getAllAgendas = async (req: Request, res: Response) => {
     const meetingClass = req.query.meetingClass as string || '';
     const location = req.query.location as string || '';
     const createdBy = req.query.createdBy as string || '';
+    const fromDate = req.query.fromDate as string || '';
+    const toDate = req.query.toDate as string || '';
     const sortBy = req.query.sortBy as string || 'draftDate';
     const sortOrder = req.query.sortOrder as string === 'asc' ? 1 : -1;
 
@@ -61,15 +64,34 @@ export const getAllAgendas = async (req: Request, res: Response) => {
       filter.createdBy = createdBy;
     }
 
+    // Date range filtration - Filter by draftDate
+    if (fromDate || toDate) {
+      filter.draftDate = {};
+      
+      if (fromDate) {
+        // Parse fromDate and set to start of day
+        const from = new Date(fromDate);
+        from.setHours(0, 0, 0, 0);
+        filter.draftDate.$gte = from;
+      }
+      
+      if (toDate) {
+        // Parse toDate and set to end of day
+        const to = new Date(toDate);
+        to.setHours(23, 59, 59, 999);
+        filter.draftDate.$lte = to;
+      }
+    }
+
     // Sort object
     const sort: any = {};
     sort[sortBy] = sortOrder;
 
     const agendas = await Agenda.find(filter)
-      .populate('createdBy', 'firstName lastName email avatar role')
-      .populate('approvedBy', 'firstName lastName email avatar')
-      .populate('draftContributors', 'firstName lastName email avatar')
-      .populate('meetingContributors', 'firstName lastName email avatar')
+      .populate('createdBy', 'name email role')
+      .populate('approvedBy', 'name email role')
+      .populate('draftContributors', 'firstName middleName lastName gender gibyGubayeId phone email')
+      .populate('meetingContributors', 'firstName middleName lastName gender gibyGubayeId phone email')
       .sort(sort)
       .skip(skip)
       .limit(limit);
@@ -103,10 +125,10 @@ export const getAgenda = async (req: Request, res: Response) => {
     }
 
     const agenda = await Agenda.findById(id)
-      .populate('createdBy', 'firstName lastName email avatar role')
-      .populate('approvedBy', 'firstName lastName email avatar')
-      .populate('draftContributors', 'firstName lastName email avatar')
-      .populate('meetingContributors', 'firstName lastName email avatar');
+      .populate('createdBy', 'name email role')
+      .populate('approvedBy', 'name email role')
+      .populate('draftContributors', 'firstName middleName lastName gender gibyGubayeId phone email')
+      .populate('meetingContributors', 'firstName middleName lastName gender gibyGubayeId phone email');
 
     if (!agenda) {
       return errorResponse(res, 'Agenda not found', 404);
@@ -140,10 +162,18 @@ export const createAgenda = async (req: Request, res: Response) => {
       return errorResponse(res, 'User not found', 404);
     }
 
-    // Validate draft contributors
+    // Validate draft contributors (must be valid Student IDs)
     const validContributors = Array.isArray(draftContributors) 
       ? draftContributors.filter((id: string) => mongoose.Types.ObjectId.isValid(id))
       : [];
+
+    // Verify all contributor IDs are valid students
+    if (validContributors.length > 0) {
+      const students = await Student.find({ _id: { $in: validContributors } });
+      if (students.length !== validContributors.length) {
+        return errorResponse(res, 'One or more student contributors not found', 400);
+      }
+    }
 
     // Parse agenda titles
     let titlesArray: IAgendaTitle[] = [];
@@ -173,8 +203,8 @@ export const createAgenda = async (req: Request, res: Response) => {
     
     // Populate references
     const populatedAgenda = await Agenda.findById(newAgenda._id)
-      .populate('createdBy', 'firstName lastName email avatar')
-      .populate('draftContributors', 'firstName lastName email avatar');
+      .populate('createdBy', 'name email role')
+      .populate('draftContributors', 'firstName middleName lastName gender gibyGubayeId phone email');
 
     successResponse(res, populatedAgenda, 'Agenda created successfully');
   } catch (error: any) {
@@ -222,6 +252,14 @@ export const updateAgenda = async (req: Request, res: Response) => {
         req.body.draftContributors = req.body.draftContributors.filter((id: string) => 
           mongoose.Types.ObjectId.isValid(id)
         );
+        
+        // Verify all contributor IDs are valid students
+        if (req.body.draftContributors.length > 0) {
+          const students = await Student.find({ _id: { $in: req.body.draftContributors } });
+          if (students.length !== req.body.draftContributors.length) {
+            return errorResponse(res, 'One or more student contributors not found', 400);
+          }
+        }
       }
     }
 
@@ -242,9 +280,9 @@ export const updateAgenda = async (req: Request, res: Response) => {
       { ...req.body },
       { new: true, runValidators: true }
     )
-    .populate('createdBy', 'firstName lastName email avatar')
-    .populate('draftContributors', 'firstName lastName email avatar')
-    .populate('meetingContributors', 'firstName lastName email avatar');
+    .populate('createdBy', 'name email role')
+    .populate('draftContributors', 'firstName middleName lastName gender gibyGubayeId phone email')
+    .populate('meetingContributors', 'firstName middleName lastName gender gibyGubayeId phone email');
 
     successResponse(res, updatedAgenda, 'Agenda updated successfully');
   } catch (error: any) {
@@ -286,10 +324,10 @@ export const approveAgenda = async (req: Request, res: Response) => {
       },
       { new: true, runValidators: true }
     )
-    .populate('createdBy', 'firstName lastName email avatar')
-    .populate('approvedBy', 'firstName lastName email avatar')
-    .populate('draftContributors', 'firstName lastName email avatar')
-    .populate('meetingContributors', 'firstName lastName email avatar');
+    .populate('createdBy', 'name email role')
+    .populate('approvedBy', 'name email role')
+    .populate('draftContributors', 'firstName middleName lastName gender gibyGubayeId phone email')
+    .populate('meetingContributors', 'firstName middleName lastName gender gibyGubayeId phone email');
 
     successResponse(res, updatedAgenda, 'Agenda approved successfully');
   } catch (error: any) {
@@ -387,6 +425,14 @@ export const continueAgenda = async (req: Request, res: Response) => {
       updateData.meetingContributors = meetingContributors.filter((id: string) => 
         mongoose.Types.ObjectId.isValid(id)
       );
+      
+      // Verify all meeting contributor IDs are valid students
+      if (updateData.meetingContributors.length > 0) {
+        const students = await Student.find({ _id: { $in: updateData.meetingContributors } });
+        if (students.length !== updateData.meetingContributors.length) {
+          return errorResponse(res, 'One or more meeting contributors not found', 400);
+        }
+      }
     }
 
     // Update status if changing to completed
@@ -400,10 +446,10 @@ export const continueAgenda = async (req: Request, res: Response) => {
       updateData,
       { new: true, runValidators: true }
     )
-    .populate('createdBy', 'firstName lastName email avatar')
-    .populate('approvedBy', 'firstName lastName email avatar')
-    .populate('draftContributors', 'firstName lastName email avatar')
-    .populate('meetingContributors', 'firstName lastName email avatar');
+    .populate('createdBy', 'name email role')
+    .populate('approvedBy', 'name email role')
+    .populate('draftContributors', 'firstName middleName lastName gender gibyGubayeId phone email')
+    .populate('meetingContributors', 'firstName middleName lastName gender gibyGubayeId phone email');
 
     successResponse(res, updatedAgenda, 'Agenda updated successfully');
   } catch (error: any) {
@@ -424,6 +470,11 @@ export const deleteAgenda = async (req: Request, res: Response) => {
     const agenda = await Agenda.findById(id);
     if (!agenda) {
       return errorResponse(res, 'Agenda not found', 404);
+    }
+
+    // Check if agenda is pending - only allow deletion of pending agendas
+    if (agenda.status !== 'pending') {
+      return errorResponse(res, 'Only pending agendas can be deleted', 400);
     }
 
     // Check if user has permission (admin, moderator or the creator)
@@ -453,6 +504,26 @@ export const getAgendaStatistics = async (req: Request, res: Response) => {
     let matchFilter: any = {};
     if (userRole !== 'admin' && userRole !== 'moderator') {
       matchFilter.createdBy = userId;
+    }
+
+    // Add date range filter if provided
+    const fromDate = req.query.fromDate as string;
+    const toDate = req.query.toDate as string;
+    
+    if (fromDate || toDate) {
+      matchFilter.draftDate = {};
+      
+      if (fromDate) {
+        const from = new Date(fromDate);
+        from.setHours(0, 0, 0, 0);
+        matchFilter.draftDate.$gte = from;
+      }
+      
+      if (toDate) {
+        const to = new Date(toDate);
+        to.setHours(23, 59, 59, 999);
+        matchFilter.draftDate.$lte = to;
+      }
     }
 
     const totalAgendas = await Agenda.countDocuments(matchFilter);
@@ -499,12 +570,12 @@ export const getAgendaStatistics = async (req: Request, res: Response) => {
       { $sort: { '_id.year': 1, '_id.month': 1 } }
     ]);
 
-    // Recent agendas
+    // Recent agendas - FIXED: Changed from 'firstName lastName' to 'name'
     const recentAgendas = await Agenda.find(matchFilter)
       .sort({ createdAt: -1 })
       .limit(5)
-      .select('meetingClass location status draftDate')
-      .populate('createdBy', 'firstName lastName')
+      .select('meetingClass location status draftDate createdBy')
+      .populate('createdBy', 'name')  // ← FIXED HERE
       .lean();
 
     successResponse(res, {
@@ -536,6 +607,26 @@ export const getFilterOptions = async (req: Request, res: Response) => {
       matchFilter.createdBy = userId;
     }
 
+    // Add date range filter if provided
+    const fromDate = req.query.fromDate as string;
+    const toDate = req.query.toDate as string;
+    
+    if (fromDate || toDate) {
+      matchFilter.draftDate = {};
+      
+      if (fromDate) {
+        const from = new Date(fromDate);
+        from.setHours(0, 0, 0, 0);
+        matchFilter.draftDate.$gte = from;
+      }
+      
+      if (toDate) {
+        const to = new Date(toDate);
+        to.setHours(23, 59, 59, 999);
+        matchFilter.draftDate.$lte = to;
+      }
+    }
+
     const meetingClasses = await Agenda.distinct('meetingClass', matchFilter);
     const locations = await Agenda.distinct('location', matchFilter);
     const creators = await Agenda.aggregate([
@@ -548,15 +639,15 @@ export const getFilterOptions = async (req: Request, res: Response) => {
       { $limit: 50 }
     ]);
 
-    // Get creator details
+    // Get creator details - FIXED: Changed from 'firstName lastName' to 'name'
     const creatorIds = creators.map(c => c._id).filter((id): id is mongoose.Types.ObjectId => id != null);
     const creatorDetails = await User.find(
       { _id: { $in: creatorIds } },
-      '_id firstName lastName email'
+      '_id name email role'  // ← FIXED HERE
     );
 
-    // Get all users for contributor selection
-    const allUsers = await User.find({}, '_id firstName lastName email role')
+    // Get all students for contributor selection
+    const allStudents = await Student.find({}, '_id firstName middleName lastName gender gibyGubayeId phone email')
       .sort({ firstName: 1 })
       .limit(100);
 
@@ -564,7 +655,7 @@ export const getFilterOptions = async (req: Request, res: Response) => {
       meetingClasses: meetingClasses.filter(Boolean).sort(),
       locations: locations.filter(Boolean).sort(),
       creators: creatorDetails,
-      allUsers
+      allStudents
     }, 'Filter options retrieved successfully');
   } catch (error: any) {
     console.error('Error fetching filter options:', error);
@@ -581,6 +672,8 @@ export const getApprovalQueue = async (req: Request, res: Response) => {
     const meetingClass = req.query.meetingClass as string || '';
     const location = req.query.location as string || '';
     const creator = req.query.creator as string || '';
+    const fromDate = req.query.fromDate as string || '';
+    const toDate = req.query.toDate as string || '';
     const sortBy = req.query.sortBy as string || 'draftDate';
     const sortOrder = req.query.sortOrder as string === 'asc' ? 1 : -1;
 
@@ -609,13 +702,32 @@ export const getApprovalQueue = async (req: Request, res: Response) => {
       filter.createdBy = creator;
     }
 
+    // Date range filtration - Filter by draftDate
+    if (fromDate || toDate) {
+      filter.draftDate = {};
+      
+      if (fromDate) {
+        // Parse fromDate and set to start of day
+        const from = new Date(fromDate);
+        from.setHours(0, 0, 0, 0);
+        filter.draftDate.$gte = from;
+      }
+      
+      if (toDate) {
+        // Parse toDate and set to end of day
+        const to = new Date(toDate);
+        to.setHours(23, 59, 59, 999);
+        filter.draftDate.$lte = to;
+      }
+    }
+
     // Sort object
     const sort: any = {};
     sort[sortBy] = sortOrder;
 
     const agendas = await Agenda.find(filter)
-      .populate('createdBy', 'firstName lastName email avatar')
-      .populate('draftContributors', 'firstName lastName email')
+      .populate('createdBy', 'name email role')  // ← FIXED HERE
+      .populate('draftContributors', 'firstName middleName lastName gender gibyGubayeId phone email')
       .sort(sort)
       .skip(skip)
       .limit(limit);
@@ -635,6 +747,64 @@ export const getApprovalQueue = async (req: Request, res: Response) => {
     }, 'Approval queue retrieved successfully');
   } catch (error: any) {
     console.error('Error fetching approval queue:', error);
+    errorResponse(res, error.message, 500);
+  }
+};
+
+// Get students by IDs endpoint
+export const getStudentsByIds = async (req: Request, res: Response) => {
+  try {
+    const { studentIds } = req.body;
+    
+    if (!Array.isArray(studentIds)) {
+      return errorResponse(res, 'studentIds must be an array', 400);
+    }
+
+    // Filter valid ObjectIds
+    const validIds = studentIds.filter((id: string) => mongoose.Types.ObjectId.isValid(id));
+    
+    if (validIds.length === 0) {
+      return successResponse(res, [], 'No valid student IDs provided');
+    }
+
+    // Fetch students by IDs
+    const students = await Student.find(
+      { _id: { $in: validIds } },
+      '_id firstName middleName lastName gender gibyGubayeId phone email'
+    );
+
+    successResponse(res, students, 'Students retrieved successfully');
+  } catch (error: any) {
+    console.error('Error fetching students by IDs:', error);
+    errorResponse(res, error.message, 500);
+  }
+};
+
+// Get users by IDs endpoint
+export const getUsersByIds = async (req: Request, res: Response) => {
+  try {
+    const { userIds } = req.body;
+    
+    if (!Array.isArray(userIds)) {
+      return errorResponse(res, 'userIds must be an array', 400);
+    }
+
+    // Filter valid ObjectIds
+    const validIds = userIds.filter((id: string) => mongoose.Types.ObjectId.isValid(id));
+    
+    if (validIds.length === 0) {
+      return successResponse(res, [], 'No valid user IDs provided');
+    }
+
+    // Fetch users by IDs
+    const users = await User.find(
+      { _id: { $in: validIds } },
+      '_id name email role'
+    );
+
+    successResponse(res, users, 'Users retrieved successfully');
+  } catch (error: any) {
+    console.error('Error fetching users by IDs:', error);
     errorResponse(res, error.message, 500);
   }
 };
