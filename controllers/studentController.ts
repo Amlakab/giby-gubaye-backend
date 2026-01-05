@@ -1,8 +1,6 @@
 import { Request, Response } from 'express';
 import Student, { IStudent } from '../models/Student';
 import { generateStudentId } from '../utils/generateStudentId';
-import fs from 'fs';
-import path from 'path';
 import mongoose from 'mongoose';
 
 // Helper functions
@@ -75,6 +73,7 @@ export const getAllStudents = async (req: Request, res: Response) => {
     }
 
     const students = await Student.find(filter)
+      .select('-photoData') // Don't send binary data in list
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -99,7 +98,6 @@ export const getAllStudents = async (req: Request, res: Response) => {
 };
 
 // Get single student
-// Get single student - UPDATED to handle both MongoDB ID and gibyGubayeId (case-sensitive)
 export const getStudent = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -110,19 +108,16 @@ export const getStudent = async (req: Request, res: Response) => {
 
     let student = null;
 
-    // Check if the ID is a valid MongoDB ObjectId (24-character hex string)
-     // Check if the ID is a valid MongoDB ObjectId
+    // Check if the ID is a valid MongoDB ObjectId
     if (mongoose.Types.ObjectId.isValid(id)) {
-      // Try to find by MongoDB _id first
-      student = await Student.findById(id);
+      student = await Student.findById(id).select('-photoData');
     }
     
-    // If not found by _id or not a valid ObjectId, try by gibyGubayeId (CASE-SENSITIVE)
+    // If not found by _id, try by gibyGubayeId
     if (!student) {
-      // Search by gibyGubayeId with EXACT CASE-SENSITIVE match
       student = await Student.findOne({ 
-        gibyGubayeId: id // No regex, exact case-sensitive match
-      });
+        gibyGubayeId: id
+      }).select('-photoData');
     }
 
     if (!student) {
@@ -180,10 +175,23 @@ export const createStudent = async (req: Request, res: Response) => {
       return errorResponse(res, 'Student with this email already exists', 400);
     }
 
+    // Generate student ID
+    const gibyGubayeId = await generateStudentId(batch);
+
     // Handle photo upload
     let photo = '';
+    let photoData = undefined;
+    
     if (req.file) {
-      photo = `/uploads/students/${req.file.filename}`;
+      // Store actual data in photoData field
+      photoData = {
+        data: req.file.buffer,
+        contentType: req.file.mimetype,
+        fileName: req.file.originalname
+      };
+      
+      // Keep the old URL format for frontend compatibility
+      photo = `/uploads/students/${Date.now()}-${Math.random().toString(36).substring(2)}-${req.file.originalname}`;
     }
 
     // Parse additionalLanguages if it's a string
@@ -195,9 +203,6 @@ export const createStudent = async (req: Request, res: Response) => {
         additionalLanguagesArray = additionalLanguages;
       }
     }
-    
-    // Generate student ID
-    const gibyGubayeId = await generateStudentId(batch);
 
     const newStudent = new Student({
       gibyGubayeId,
@@ -229,13 +234,18 @@ export const createStudent = async (req: Request, res: Response) => {
       numberOfJob: 0,
       dateOfBirth: new Date(dateOfBirth),
       emergencyContact,
-      photo,
+      photo, // Keep for frontend
+      photoData, // Store actual data
       isActive: true
     });
 
     await newStudent.save();
     
-    successResponse(res, newStudent, 'Student created successfully');
+    // Return without photoData for cleaner response
+    const studentResponse = newStudent.toObject();
+    delete studentResponse.photoData;
+    
+    successResponse(res, studentResponse, 'Student created successfully');
   } catch (error: any) {
     console.error('Error creating student:', error);
     if (error.code === 11000) {
@@ -279,14 +289,15 @@ export const updateStudent = async (req: Request, res: Response) => {
 
     // Handle photo upload
     if (req.file) {
-      // Delete old photo if exists
-      if (student.photo) {
-        const oldPhotoPath = path.join(__dirname, '..', '..', 'public', student.photo);
-        if (fs.existsSync(oldPhotoPath)) {
-          fs.unlinkSync(oldPhotoPath);
-        }
-      }
-      req.body.photo = `/uploads/students/${req.file.filename}`;
+      // Store actual data
+      req.body.photoData = {
+        data: req.file.buffer,
+        contentType: req.file.mimetype,
+        fileName: req.file.originalname
+      };
+      
+      // Keep old URL format
+      req.body.photo = `/uploads/students/${Date.now()}-${Math.random().toString(36).substring(2)}-${req.file.originalname}`;
     }
 
     // Update date of birth if provided
@@ -310,7 +321,7 @@ export const updateStudent = async (req: Request, res: Response) => {
       id,
       { ...req.body },
       { new: true, runValidators: true }
-    );
+    ).select('-photoData');
 
     successResponse(res, updatedStudent, 'Student updated successfully');
   } catch (error: any) {
@@ -320,6 +331,60 @@ export const updateStudent = async (req: Request, res: Response) => {
       return errorResponse(res, `Student with this ${field} already exists`, 400);
     }
     errorResponse(res, error.message, 500);
+  }
+};
+
+// Serve student photo (handles old URL format)
+export const serveStudentPhoto = async (req: Request, res: Response) => {
+  try {
+    const { filename } = req.params;
+    
+    // Find student by photo URL (exact match)
+    const student = await Student.findOne({ photo: `/uploads/students/${filename}` });
+    
+    if (!student || !student.photoData || !student.photoData.data) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Photo not found' 
+      });
+    }
+
+    // Set proper headers and send the image
+    res.set('Content-Type', student.photoData.contentType);
+    res.set('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+    res.send(student.photoData.data);
+  } catch (error: any) {
+    console.error('Error serving student photo:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error' 
+    });
+  }
+};
+
+// Get student photo by ID
+export const getStudentPhotoById = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    
+    const student = await Student.findById(id);
+    
+    if (!student || !student.photoData || !student.photoData.data) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Photo not found' 
+      });
+    }
+
+    res.set('Content-Type', student.photoData.contentType);
+    res.set('Cache-Control', 'public, max-age=31536000');
+    res.send(student.photoData.data);
+  } catch (error: any) {
+    console.error('Error fetching student photo:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error' 
+    });
   }
 };
 
@@ -341,7 +406,7 @@ export const updateStudentStatus = async (req: Request, res: Response) => {
       id,
       { isActive },
       { new: true, runValidators: true }
-    );
+    ).select('-photoData');
 
     if (!student) {
       return errorResponse(res, 'Student not found', 404);
@@ -365,14 +430,6 @@ export const deleteStudent = async (req: Request, res: Response) => {
     const student = await Student.findById(id);
     if (!student) {
       return errorResponse(res, 'Student not found', 404);
-    }
-
-    // Delete photo if exists
-    if (student.photo) {
-      const photoPath = path.join(__dirname, '..', '..', 'public', student.photo);
-      if (fs.existsSync(photoPath)) {
-        fs.unlinkSync(photoPath);
-      }
     }
 
     await Student.findByIdAndDelete(id);

@@ -1,7 +1,5 @@
 import express from 'express';
 import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
 import {
   getAllBlogs,
   getBlog,
@@ -19,41 +17,15 @@ import {
   getPublicBlogs,
   getPublicBlog,
   getPublicFilterOptions,
-  getApprovedBlogs // NEW: Add this import
+  getApprovedBlogs,
+  getBlogImageById
 } from '../controllers/blogController';
-import { authenticate, authorize } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
 
 const router = express.Router();
 
-// Create uploads directory if it doesn't exist
-const createUploadsDirectory = () => {
-  const projectRoot = process.cwd();
-  const uploadPath = path.join(projectRoot, 'public', 'uploads', 'blogs');
-  
-  if (!fs.existsSync(uploadPath)) {
-    fs.mkdirSync(uploadPath, { recursive: true });
-  }
-  
-  return uploadPath;
-};
-
-// Initialize upload directory
-const uploadPath = createUploadsDirectory();
-
-// Configure multer for file upload
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath, { recursive: true });
-    }
-    cb(null, uploadPath);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, uniqueSuffix + ext);
-  }
-});
+// Configure multer for memory storage
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage: storage,
@@ -62,8 +34,8 @@ const upload = multer({
   },
   fileFilter: function (req, file, cb) {
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
+    const extname = allowedTypes.test(file.originalname.toLowerCase());
     
     if (mimetype && extname) {
       return cb(null, true);
@@ -74,11 +46,14 @@ const upload = multer({
 });
 
 // Public routes (No authentication required)
-router.get('/public/approved', getApprovedBlogs); // NEW: Get only approved blogs
+router.get('/public/approved', getApprovedBlogs);
 router.get('/public', getPublicBlogs);
 router.get('/public/filter-options', getPublicFilterOptions);
 router.get('/public/:id', getPublicBlog);
 router.get('/:id/view', incrementViews); // Public view increment
+
+// Get blog image by ID or slug (public access)
+router.get('/:id/image', getBlogImageById);
 
 // Protected routes (require authentication)
 router.get('/', authenticate, getAllBlogs);

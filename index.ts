@@ -17,8 +17,8 @@ import walletRoutes from './routes/wallet';
 import feedbackRoutes from './routes/feedback';
 import { connectDB } from './config/database';
 import { errorHandler } from './middleware/errorHandler';
-import path from 'path'; // IMPORTANT: Add this import
-import fs from 'fs'; // Add this import for file system operations
+import { serveStudentPhoto } from './controllers/studentController';
+import { serveBlogImage } from './controllers/blogController';
 
 dotenv.config();
 
@@ -59,35 +59,10 @@ app.options('*', cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// FIX: Create uploads directory if it doesn't exist
-const createUploadsDirectory = () => {
-  // Get the project root directory (where package.json is)
-  const projectRoot = process.cwd();
-  const uploadsDir = path.join(projectRoot, 'public', 'uploads');
-  
-  // Create directory if it doesn't exist
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-    console.log('📁 Created uploads directory:', uploadsDir);
-  }
-  
-  return uploadsDir;
-};
-
-// Initialize uploads directory
-createUploadsDirectory();
-
-// FIX: Serve static files from the correct location
-// Use the same path that studentRoutes.ts uses
-const uploadsPath = path.join(process.cwd(), 'public', 'uploads');
-app.use('/uploads', express.static(uploadsPath));
-app.use('/uploads/blogs', express.static(path.join(__dirname, '..', 'public', 'uploads', 'blogs')));
-// Debug middleware for static files (optional - remove in production)
-app.use('/uploads', (req, res, next) => {
-  console.log(`📁 Static file request: ${req.url}`);
-  console.log(`📁 Looking in: ${uploadsPath}`);
-  next();
-});
+// BACKWARD COMPATIBILITY ROUTES - Keep frontend URLs working
+// These routes intercept the old upload URLs and serve images from database
+app.get('/uploads/students/:filename', serveStudentPhoto);
+app.get('/uploads/blogs/:filename', serveBlogImage);
 
 // Routes
 app.use('/api/user', userRoutes);
@@ -102,52 +77,17 @@ app.use('/api/agent', agentRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/accountants', accountantRoutes);
 
-
 // Enhanced health check endpoint
 app.get('/api/health', (req, res) => {
   res.status(200).json({ 
     status: 'OK', 
     message: 'Server is running',
     cors: `Restricted to: ${CLIENT_URL}`,
-    uploadsPath: uploadsPath,
-    projectRoot: process.cwd(),
     timestamp: new Date().toISOString(),
-    origin: req.headers.origin || 'Unknown'
+    origin: req.headers.origin || 'Unknown',
+    imageStorage: 'database',
+    compatibility: 'frontend URLs unchanged'
   });
-});
-
-// CORS test endpoint
-app.get('/api/cors-test', (req, res) => {
-  const origin = req.headers.origin;
-  const isAllowed = origin === CLIENT_URL;
-  
-  res.status(200).json({ 
-    message: isAllowed ? 'CORS is working! Origin allowed.' : 'CORS: Origin not allowed',
-    yourOrigin: origin,
-    allowedOrigin: CLIENT_URL,
-    allowed: isAllowed,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Test file serving endpoint
-app.get('/api/test-upload', (req, res) => {
-  const testFilePath = path.join(uploadsPath, 'test.txt');
-  
-  // Create a test file
-  fs.writeFileSync(testFilePath, 'This is a test file for uploads directory.');
-  
-  res.json({
-    message: 'Test file created',
-    testFilePath: testFilePath,
-    testFileUrl: 'https://giby-gubaye-backend.onrender.com/uploads/test.txt',
-    uploadsPath: uploadsPath
-  });
-});
-
-// WebSocket endpoint for clients that need raw WebSocket
-app.get('/ws', (req, res) => {
-  res.status(400).json({ error: 'Use Socket.io client instead' });
 });
 
 // Error handling middleware
@@ -162,10 +102,8 @@ server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🌐 CORS: Restricted to ${CLIENT_URL}`);
   console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`📁 Uploads path: ${uploadsPath}`);
-  console.log(`📁 Project root: ${process.cwd()}`);
+  console.log(`💾 Images stored in: MongoDB Database`);
+  console.log(`🔗 Frontend compatibility: URLs unchanged`);
   console.log(`✅ Health check: http://localhost:${PORT}/api/health`);
-  console.log(`✅ CORS test: http://localhost:${PORT}/api/cors-test`);
-  console.log(`✅ Upload test: http://localhost:${PORT}/api/test-upload`);
   console.log(`📱 Mobile apps must connect from: ${CLIENT_URL}`);
 });

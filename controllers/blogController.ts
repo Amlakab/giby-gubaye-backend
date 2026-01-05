@@ -2,8 +2,6 @@ import { Request, Response } from 'express';
 import Blog, { IBlog } from '../models/Blog';
 import User from '../models/User';
 import mongoose from 'mongoose';
-import fs from 'fs';
-import path from 'path';
 
 // Helper functions
 const successResponse = (res: Response, data: any, message: string = 'Success', statusCode: number = 200) => {
@@ -96,6 +94,7 @@ export const getAllBlogs = async (req: Request, res: Response) => {
     sort[sortBy] = sortOrder;
 
     const blogs = await Blog.find(filter)
+      .select('-imageData') // Don't send binary data in list
       .populate('createdBy', 'firstName lastName email avatar')
       .populate('approvedBy', 'firstName lastName email avatar')
       .sort(sort)
@@ -171,6 +170,7 @@ export const getApprovedBlogs = async (req: Request, res: Response) => {
     sort[sortBy] = sortOrder;
 
     const blogs = await Blog.find(filter)
+      .select('-imageData')
       .populate('createdBy', 'firstName lastName email avatar')
       .sort(sort)
       .skip(skip)
@@ -245,6 +245,7 @@ export const getPublicBlogs = async (req: Request, res: Response) => {
     sort[sortBy] = sortOrder;
 
     const blogs = await Blog.find(filter)
+      .select('-imageData')
       .populate('createdBy', 'firstName lastName email avatar')
       .sort(sort)
       .skip(skip)
@@ -278,10 +279,12 @@ export const getBlog = async (req: Request, res: Response) => {
     
     if (mongoose.Types.ObjectId.isValid(id)) {
       blog = await Blog.findById(id)
+        .select('-imageData')
         .populate('createdBy', 'firstName lastName email avatar role')
         .populate('approvedBy', 'firstName lastName email avatar');
     } else {
       blog = await Blog.findOne({ slug: id })
+        .select('-imageData')
         .populate('createdBy', 'firstName lastName email avatar role')
         .populate('approvedBy', 'firstName lastName email avatar');
     }
@@ -305,10 +308,12 @@ export const getPublicBlog = async (req: Request, res: Response) => {
     
     if (mongoose.Types.ObjectId.isValid(id)) {
       blog = await Blog.findOne({ _id: id, status: 'published' })
+        .select('-imageData')
         .populate('createdBy', 'firstName lastName email avatar')
         .populate('approvedBy', 'firstName lastName email avatar');
     } else {
       blog = await Blog.findOne({ slug: id, status: 'published' })
+        .select('-imageData')
         .populate('createdBy', 'firstName lastName email avatar')
         .populate('approvedBy', 'firstName lastName email avatar');
     }
@@ -320,6 +325,66 @@ export const getPublicBlog = async (req: Request, res: Response) => {
     successResponse(res, blog, 'Blog retrieved successfully');
   } catch (error: any) {
     errorResponse(res, error.message, 500);
+  }
+};
+
+// Serve blog image (handles old URL format)
+export const serveBlogImage = async (req: Request, res: Response) => {
+  try {
+    const { filename } = req.params;
+    
+    // Find blog by image URL (exact match)
+    const blog = await Blog.findOne({ image: `/uploads/blogs/${filename}` });
+    
+    if (!blog || !blog.imageData || !blog.imageData.data) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Image not found' 
+      });
+    }
+
+    // Set proper headers and send the image
+    res.set('Content-Type', blog.imageData.contentType);
+    res.set('Cache-Control', 'public, max-age=31536000');
+    res.send(blog.imageData.data);
+  } catch (error: any) {
+    console.error('Error serving blog image:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error' 
+    });
+  }
+};
+
+// Get blog image by ID
+export const getBlogImageById = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    
+    let blog;
+    
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      blog = await Blog.findById(id).select('imageData');
+    } else {
+      blog = await Blog.findOne({ slug: id }).select('imageData');
+    }
+    
+    if (!blog || !blog.imageData || !blog.imageData.data) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Image not found' 
+      });
+    }
+
+    res.set('Content-Type', blog.imageData.contentType);
+    res.set('Cache-Control', 'public, max-age=31536000');
+    res.send(blog.imageData.data);
+  } catch (error: any) {
+    console.error('Error fetching blog image:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error' 
+    });
   }
 };
 
@@ -355,8 +420,18 @@ export const createBlog = async (req: Request, res: Response) => {
 
     // Handle image upload
     let image = '';
+    let imageData = undefined;
+    
     if (req.file) {
-      image = `/uploads/blogs/${req.file.filename}`;
+      // Store actual data
+      imageData = {
+        data: req.file.buffer,
+        contentType: req.file.mimetype,
+        fileName: req.file.originalname
+      };
+      
+      // Keep old URL format for frontend compatibility
+      image = `/uploads/blogs/${Date.now()}-${Math.random().toString(36).substring(2)}-${req.file.originalname}`;
     }
 
     // Parse tags if it's a string
@@ -393,7 +468,8 @@ export const createBlog = async (req: Request, res: Response) => {
       category,
       createdBy,
       slug,
-      image,
+      image, // Keep for frontend
+      imageData, // Store actual data
       tags: tagsArray,
       metaTitle: metaTitle || title,
       metaDescription: metaDescription || description.substring(0, 150),
@@ -407,8 +483,9 @@ export const createBlog = async (req: Request, res: Response) => {
 
     await newBlog.save();
     
-    // Populate author info
+    // Return without imageData for cleaner response
     const populatedBlog = await Blog.findById(newBlog._id)
+      .select('-imageData')
       .populate('createdBy', 'firstName lastName email avatar');
     
     successResponse(res, populatedBlog, 'Blog created successfully');
@@ -453,14 +530,15 @@ export const updateBlog = async (req: Request, res: Response) => {
 
     // Handle image upload
     if (req.file) {
-      // Delete old image if exists
-      if (blog.image) {
-        const oldImagePath = path.join(process.cwd(), 'public', blog.image);
-        if (fs.existsSync(oldImagePath)) {
-          fs.unlinkSync(oldImagePath);
-        }
-      }
-      req.body.image = `/uploads/blogs/${req.file.filename}`;
+      // Store actual data
+      req.body.imageData = {
+        data: req.file.buffer,
+        contentType: req.file.mimetype,
+        fileName: req.file.originalname
+      };
+      
+      // Keep old URL format
+      req.body.image = `/uploads/blogs/${Date.now()}-${Math.random().toString(36).substring(2)}-${req.file.originalname}`;
     }
 
     // Handle tags
@@ -509,6 +587,7 @@ export const updateBlog = async (req: Request, res: Response) => {
       { ...req.body },
       { new: true, runValidators: true }
     )
+    .select('-imageData')
     .populate('createdBy', 'firstName lastName email avatar')
     .populate('approvedBy', 'firstName lastName email avatar');
 
@@ -579,6 +658,7 @@ export const updateBlogStatus = async (req: Request, res: Response) => {
       updateData,
       { new: true, runValidators: true }
     )
+    .select('-imageData')
     .populate('createdBy', 'firstName lastName email avatar')
     .populate('approvedBy', 'firstName lastName email avatar');
 
@@ -618,6 +698,7 @@ export const toggleFeatured = async (req: Request, res: Response) => {
       { isFeatured },
       { new: true, runValidators: true }
     )
+    .select('-imageData')
     .populate('createdBy', 'firstName lastName email avatar');
 
     successResponse(res, updatedBlog, `Blog ${isFeatured ? 'featured' : 'unfeatured'} successfully`);
@@ -648,14 +729,6 @@ export const deleteBlog = async (req: Request, res: Response) => {
       return errorResponse(res, 'Not authorized to delete this blog', 403);
     }
 
-    // Delete image if exists
-    if (blog.image) {
-      const imagePath = path.join(process.cwd(), 'public', blog.image);
-      if (fs.existsSync(imagePath)) {
-        fs.unlinkSync(imagePath);
-      }
-    }
-
     await Blog.findByIdAndDelete(id);
 
     successResponse(res, null, 'Blog deleted successfully');
@@ -676,13 +749,13 @@ export const incrementViews = async (req: Request, res: Response) => {
         { _id: id },
         { $inc: { viewsCount: 1 } },
         { new: true }
-      );
+      ).select('-imageData');
     } else {
       blog = await Blog.findOneAndUpdate(
         { slug: id },
         { $inc: { viewsCount: 1 } },
         { new: true }
-      );
+      ).select('-imageData');
     }
     
     if (!blog) {
@@ -695,7 +768,7 @@ export const incrementViews = async (req: Request, res: Response) => {
   }
 };
 
-// Get blog statistics (FIXED VERSION)
+// Get blog statistics
 export const getBlogStatistics = async (req: Request, res: Response) => {
   try {
     // Get user ID for filtering (if non-admin)
@@ -768,13 +841,13 @@ export const getBlogStatistics = async (req: Request, res: Response) => {
 
     // Top viewed blogs
     const topViewedBlogs = await Blog.find({ ...matchFilter, status: 'published' })
+      .select('-imageData')
       .sort({ viewsCount: -1 })
       .limit(5)
       .select('title viewsCount slug category')
       .lean();
 
     // Top authors (only for admin/moderator)
-    // Explicitly type the array
     let topAuthors: Array<{
       _id: {
         _id: mongoose.Types.ObjectId;
@@ -807,10 +880,9 @@ export const getBlogStatistics = async (req: Request, res: Response) => {
         '_id firstName lastName email'
       );
 
-      // Use type assertion to fix the property access issue
       topAuthors = topAuthorsAgg.map(agg => {
         const author = authors.find(a => a._id.toString() === agg._id.toString());
-        const userDoc = author as any; // Type assertion to avoid TypeScript errors
+        const userDoc = author as any;
         
         return {
           _id: { 
@@ -939,6 +1011,7 @@ export const getRelatedBlogs = async (req: Request, res: Response) => {
         { tags: { $in: blog.tags } }
       ]
     })
+    .select('-imageData')
     .sort({ viewsCount: -1, createdAt: -1 })
     .limit(4)
     .select('title description image slug viewsCount readingTime blogDate')
@@ -999,6 +1072,7 @@ export const approveBlog = async (req: Request, res: Response) => {
       updateData,
       { new: true, runValidators: true }
     )
+    .select('-imageData')
     .populate('createdBy', 'firstName lastName email avatar')
     .populate('approvedBy', 'firstName lastName email avatar');
 
@@ -1046,6 +1120,7 @@ export const getApprovalQueue = async (req: Request, res: Response) => {
     sort[sortBy] = sortOrder;
 
     const blogs = await Blog.find(filter)
+      .select('-imageData')
       .populate('createdBy', 'firstName lastName email avatar')
       .sort(sort)
       .skip(skip)

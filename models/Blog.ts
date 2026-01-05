@@ -4,7 +4,12 @@ export interface IBlog extends Document {
   title: string;
   description: string;
   content?: string;
-  image?: string;
+  image?: string; // Keep for frontend compatibility
+  imageData?: {
+    data: Buffer;
+    contentType: string;
+    fileName: string;
+  }; // Store actual image data
   category: string;
   createdBy: mongoose.Types.ObjectId;
   blogDate: Date;
@@ -46,6 +51,11 @@ const blogSchema = new Schema<IBlog>({
   image: {
     type: String,
     default: ''
+  },
+  imageData: {
+    data: Buffer,
+    contentType: String,
+    fileName: String
   },
   category: {
     type: String,

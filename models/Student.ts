@@ -30,7 +30,12 @@ export interface IStudent extends Document {
   numberOfJob: number;
   dateOfBirth: Date;
   emergencyContact: string;
-  photo?: string;
+  photo?: string; // Keep for frontend compatibility
+  photoData?: {
+    data: Buffer;
+    contentType: string;
+    fileName: string;
+  }; // Store actual image data
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -38,12 +43,11 @@ export interface IStudent extends Document {
 
 const studentSchema = new Schema<IStudent>({
   gibyGubayeId: {
-  type: String,
-  unique: true,
-  required: true,
-  index: true
-},
-
+    type: String,
+    unique: true,
+    required: true,
+    index: true
+  },
   firstName: {
     type: String,
     required: [true, 'First name is required'],
@@ -186,6 +190,11 @@ const studentSchema = new Schema<IStudent>({
   photo: {
     type: String,
     default: ''
+  },
+  photoData: {
+    data: Buffer,
+    contentType: String,
+    fileName: String
   },
   isActive: {
     type: Boolean,
