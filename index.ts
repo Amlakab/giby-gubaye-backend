@@ -140,7 +140,7 @@ app.get('/api/test-upload', (req, res) => {
   res.json({
     message: 'Test file created',
     testFilePath: testFilePath,
-    testFileUrl: 'http://localhost:3001/uploads/test.txt',
+    testFileUrl: 'https://giby-gubaye-backend.onrender.com/uploads/test.txt',
     uploadsPath: uploadsPath
   });
 });
