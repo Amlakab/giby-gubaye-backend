@@ -39,7 +39,7 @@ const generateUniqueSlug = async (title: string): Promise<string> => {
   return uniqueSlug;
 };
 
-// Get all blogs with pagination and filtering (FOR ADMIN/DASHBOARD)
+// Get all blogs with pagination and filtering (FOR ADMIN/DASHBOARD) - INCLUDES IMAGEDATA
 export const getAllBlogs = async (req: Request, res: Response) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
@@ -93,8 +93,8 @@ export const getAllBlogs = async (req: Request, res: Response) => {
     const sort: any = {};
     sort[sortBy] = sortOrder;
 
+    // MODIFIED: Include imageData for admin panel
     const blogs = await Blog.find(filter)
-      .select('-imageData') // Don't send binary data in list
       .populate('createdBy', 'firstName lastName email avatar')
       .populate('approvedBy', 'firstName lastName email avatar')
       .sort(sort)
@@ -120,7 +120,7 @@ export const getAllBlogs = async (req: Request, res: Response) => {
   }
 };
 
-// Get only approved blogs (PUBLIC API - No authentication required)
+// Get only approved blogs (PUBLIC API - No authentication required) - NOW INCLUDES IMAGEDATA
 export const getApprovedBlogs = async (req: Request, res: Response) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
@@ -169,8 +169,8 @@ export const getApprovedBlogs = async (req: Request, res: Response) => {
     const sort: any = {};
     sort[sortBy] = sortOrder;
 
+    // CHANGED: Now include imageData for public page too
     const blogs = await Blog.find(filter)
-      .select('-imageData')
       .populate('createdBy', 'firstName lastName email avatar')
       .sort(sort)
       .skip(skip)
@@ -195,7 +195,7 @@ export const getApprovedBlogs = async (req: Request, res: Response) => {
   }
 };
 
-// Get public blogs (published only)
+// Get public blogs (published only) - INCLUDES IMAGEDATA
 export const getPublicBlogs = async (req: Request, res: Response) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
@@ -244,8 +244,8 @@ export const getPublicBlogs = async (req: Request, res: Response) => {
     const sort: any = {};
     sort[sortBy] = sortOrder;
 
+    // CHANGED: Include imageData for public blogs
     const blogs = await Blog.find(filter)
-      .select('-imageData')
       .populate('createdBy', 'firstName lastName email avatar')
       .sort(sort)
       .skip(skip)
@@ -270,7 +270,7 @@ export const getPublicBlogs = async (req: Request, res: Response) => {
   }
 };
 
-// Get single blog by ID or slug
+// Get single blog by ID or slug (ADMIN) - INCLUDES IMAGEDATA
 export const getBlog = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -278,13 +278,13 @@ export const getBlog = async (req: Request, res: Response) => {
     let blog;
     
     if (mongoose.Types.ObjectId.isValid(id)) {
+      // ADMIN: Include imageData
       blog = await Blog.findById(id)
-        .select('-imageData')
         .populate('createdBy', 'firstName lastName email avatar role')
         .populate('approvedBy', 'firstName lastName email avatar');
     } else {
+      // ADMIN: Include imageData
       blog = await Blog.findOne({ slug: id })
-        .select('-imageData')
         .populate('createdBy', 'firstName lastName email avatar role')
         .populate('approvedBy', 'firstName lastName email avatar');
     }
@@ -299,7 +299,7 @@ export const getBlog = async (req: Request, res: Response) => {
   }
 };
 
-// Get public single blog (only published)
+// Get public single blog (only published) - INCLUDES IMAGEDATA
 export const getPublicBlog = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -307,13 +307,13 @@ export const getPublicBlog = async (req: Request, res: Response) => {
     let blog;
     
     if (mongoose.Types.ObjectId.isValid(id)) {
+      // PUBLIC: Include imageData for single blog view
       blog = await Blog.findOne({ _id: id, status: 'published' })
-        .select('-imageData')
         .populate('createdBy', 'firstName lastName email avatar')
         .populate('approvedBy', 'firstName lastName email avatar');
     } else {
+      // PUBLIC: Include imageData for single blog view
       blog = await Blog.findOne({ slug: id, status: 'published' })
-        .select('-imageData')
         .populate('createdBy', 'firstName lastName email avatar')
         .populate('approvedBy', 'firstName lastName email avatar');
     }
@@ -364,9 +364,11 @@ export const getBlogImageById = async (req: Request, res: Response) => {
     let blog;
     
     if (mongoose.Types.ObjectId.isValid(id)) {
-      blog = await Blog.findById(id).select('imageData');
+      // Fetch blog with imageData
+      blog = await Blog.findById(id);
     } else {
-      blog = await Blog.findOne({ slug: id }).select('imageData');
+      // Fetch blog with imageData
+      blog = await Blog.findOne({ slug: id });
     }
     
     if (!blog || !blog.imageData || !blog.imageData.data) {
@@ -388,7 +390,7 @@ export const getBlogImageById = async (req: Request, res: Response) => {
   }
 };
 
-// Create new blog (DEFAULT STATUS TO PENDING)
+// Create new blog (DEFAULT STATUS TO PENDING) - INCLUDES IMAGEDATA in response
 export const createBlog = async (req: Request, res: Response) => {
   try {
     const {
@@ -483,9 +485,8 @@ export const createBlog = async (req: Request, res: Response) => {
 
     await newBlog.save();
     
-    // Return without imageData for cleaner response
+    // Return with imageData for immediate display
     const populatedBlog = await Blog.findById(newBlog._id)
-      .select('-imageData')
       .populate('createdBy', 'firstName lastName email avatar');
     
     successResponse(res, populatedBlog, 'Blog created successfully');
@@ -498,7 +499,7 @@ export const createBlog = async (req: Request, res: Response) => {
   }
 };
 
-// Update blog
+// Update blog - INCLUDES IMAGEDATA in response
 export const updateBlog = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -587,7 +588,6 @@ export const updateBlog = async (req: Request, res: Response) => {
       { ...req.body },
       { new: true, runValidators: true }
     )
-    .select('-imageData')
     .populate('createdBy', 'firstName lastName email avatar')
     .populate('approvedBy', 'firstName lastName email avatar');
 
@@ -601,7 +601,7 @@ export const updateBlog = async (req: Request, res: Response) => {
   }
 };
 
-// Update blog status
+// Update blog status - INCLUDES IMAGEDATA in response
 export const updateBlogStatus = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -658,7 +658,6 @@ export const updateBlogStatus = async (req: Request, res: Response) => {
       updateData,
       { new: true, runValidators: true }
     )
-    .select('-imageData')
     .populate('createdBy', 'firstName lastName email avatar')
     .populate('approvedBy', 'firstName lastName email avatar');
 
@@ -668,7 +667,7 @@ export const updateBlogStatus = async (req: Request, res: Response) => {
   }
 };
 
-// Toggle featured status
+// Toggle featured status - INCLUDES IMAGEDATA in response
 export const toggleFeatured = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -698,7 +697,6 @@ export const toggleFeatured = async (req: Request, res: Response) => {
       { isFeatured },
       { new: true, runValidators: true }
     )
-    .select('-imageData')
     .populate('createdBy', 'firstName lastName email avatar');
 
     successResponse(res, updatedBlog, `Blog ${isFeatured ? 'featured' : 'unfeatured'} successfully`);
@@ -737,7 +735,7 @@ export const deleteBlog = async (req: Request, res: Response) => {
   }
 };
 
-// Increment view count
+// Increment view count - INCLUDES IMAGEDATA
 export const incrementViews = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -749,13 +747,13 @@ export const incrementViews = async (req: Request, res: Response) => {
         { _id: id },
         { $inc: { viewsCount: 1 } },
         { new: true }
-      ).select('-imageData');
+      ).populate('createdBy', 'firstName lastName email avatar');
     } else {
       blog = await Blog.findOneAndUpdate(
         { slug: id },
         { $inc: { viewsCount: 1 } },
         { new: true }
-      ).select('-imageData');
+      ).populate('createdBy', 'firstName lastName email avatar');
     }
     
     if (!blog) {
@@ -768,7 +766,7 @@ export const incrementViews = async (req: Request, res: Response) => {
   }
 };
 
-// Get blog statistics
+// Get blog statistics - MODIFIED to include imageData in some queries
 export const getBlogStatistics = async (req: Request, res: Response) => {
   try {
     // Get user ID for filtering (if non-admin)
@@ -839,12 +837,11 @@ export const getBlogStatistics = async (req: Request, res: Response) => {
       { $sort: { '_id.year': 1, '_id.month': 1 } }
     ]);
 
-    // Top viewed blogs
+    // Top viewed blogs - INCLUDES IMAGEDATA for admin panel
     const topViewedBlogs = await Blog.find({ ...matchFilter, status: 'published' })
-      .select('-imageData')
       .sort({ viewsCount: -1 })
       .limit(5)
-      .select('title viewsCount slug category')
+      .select('title viewsCount slug category image imageData')
       .lean();
 
     // Top authors (only for admin/moderator)
@@ -993,7 +990,7 @@ export const getPublicFilterOptions = async (req: Request, res: Response) => {
   }
 };
 
-// Get related blogs
+// Get related blogs - INCLUDES IMAGEDATA
 export const getRelatedBlogs = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -1011,10 +1008,9 @@ export const getRelatedBlogs = async (req: Request, res: Response) => {
         { tags: { $in: blog.tags } }
       ]
     })
-    .select('-imageData')
     .sort({ viewsCount: -1, createdAt: -1 })
     .limit(4)
-    .select('title description image slug viewsCount readingTime blogDate')
+    .select('title description image imageData slug viewsCount readingTime blogDate')
     .populate('createdBy', 'firstName lastName')
     .lean();
 
@@ -1024,7 +1020,7 @@ export const getRelatedBlogs = async (req: Request, res: Response) => {
   }
 };
 
-// Approve or reject blog
+// Approve or reject blog - INCLUDES IMAGEDATA in response
 export const approveBlog = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -1072,7 +1068,6 @@ export const approveBlog = async (req: Request, res: Response) => {
       updateData,
       { new: true, runValidators: true }
     )
-    .select('-imageData')
     .populate('createdBy', 'firstName lastName email avatar')
     .populate('approvedBy', 'firstName lastName email avatar');
 
@@ -1083,7 +1078,7 @@ export const approveBlog = async (req: Request, res: Response) => {
   }
 };
 
-// Get blogs for approval queue
+// Get blogs for approval queue - INCLUDES IMAGEDATA
 export const getApprovalQueue = async (req: Request, res: Response) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
@@ -1119,8 +1114,8 @@ export const getApprovalQueue = async (req: Request, res: Response) => {
     const sort: any = {};
     sort[sortBy] = sortOrder;
 
+    // CHANGED: Include imageData for approval queue
     const blogs = await Blog.find(filter)
-      .select('-imageData')
       .populate('createdBy', 'firstName lastName email avatar')
       .sort(sort)
       .skip(skip)
