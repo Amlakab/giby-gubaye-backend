@@ -19,7 +19,7 @@ const errorResponse = (res: Response, message: string = 'Error', statusCode: num
   });
 };
 
-// Get all students with pagination and filtering
+// Get all students with pagination and filtering - INCLUDES PHOTODATA
 export const getAllStudents = async (req: Request, res: Response) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
@@ -72,8 +72,8 @@ export const getAllStudents = async (req: Request, res: Response) => {
       filter.isActive = status === 'active';
     }
 
+    // CHANGED: Include photoData for admin panel
     const students = await Student.find(filter)
-      .select('-photoData') // Don't send binary data in list
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -97,7 +97,7 @@ export const getAllStudents = async (req: Request, res: Response) => {
   }
 };
 
-// Get single student
+// Get single student - INCLUDES PHOTODATA
 export const getStudent = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -110,14 +110,16 @@ export const getStudent = async (req: Request, res: Response) => {
 
     // Check if the ID is a valid MongoDB ObjectId
     if (mongoose.Types.ObjectId.isValid(id)) {
-      student = await Student.findById(id).select('-photoData');
+      // CHANGED: Include photoData for single student view
+      student = await Student.findById(id);
     }
     
     // If not found by _id, try by gibyGubayeId
     if (!student) {
+      // CHANGED: Include photoData for single student view
       student = await Student.findOne({ 
         gibyGubayeId: id
-      }).select('-photoData');
+      });
     }
 
     if (!student) {
@@ -131,7 +133,7 @@ export const getStudent = async (req: Request, res: Response) => {
   }
 };
 
-// Create new student
+// Create new student - INCLUDES PHOTODATA in response
 export const createStudent = async (req: Request, res: Response) => {
   try {
     const {
@@ -241,11 +243,8 @@ export const createStudent = async (req: Request, res: Response) => {
 
     await newStudent.save();
     
-    // Return without photoData for cleaner response
-    const studentResponse = newStudent.toObject();
-    delete studentResponse.photoData;
-    
-    successResponse(res, studentResponse, 'Student created successfully');
+    // CHANGED: Return with photoData for immediate display
+    successResponse(res, newStudent, 'Student created successfully');
   } catch (error: any) {
     console.error('Error creating student:', error);
     if (error.code === 11000) {
@@ -256,7 +255,7 @@ export const createStudent = async (req: Request, res: Response) => {
   }
 };
 
-// Update student
+// Update student - INCLUDES PHOTODATA in response
 export const updateStudent = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -317,11 +316,12 @@ export const updateStudent = async (req: Request, res: Response) => {
       req.body.attendsCourse = req.body.attendsCourse === 'true' || req.body.attendsCourse === true;
     }
 
+    // CHANGED: Include photoData in response
     const updatedStudent = await Student.findByIdAndUpdate(
       id,
       { ...req.body },
       { new: true, runValidators: true }
-    ).select('-photoData');
+    );
 
     successResponse(res, updatedStudent, 'Student updated successfully');
   } catch (error: any) {
@@ -388,7 +388,7 @@ export const getStudentPhotoById = async (req: Request, res: Response) => {
   }
 };
 
-// Update student status
+// Update student status - INCLUDES PHOTODATA
 export const updateStudentStatus = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -402,11 +402,12 @@ export const updateStudentStatus = async (req: Request, res: Response) => {
       return errorResponse(res, 'Invalid student ID', 400);
     }
 
+    // CHANGED: Include photoData in response
     const student = await Student.findByIdAndUpdate(
       id,
       { isActive },
       { new: true, runValidators: true }
-    ).select('-photoData');
+    );
 
     if (!student) {
       return errorResponse(res, 'Student not found', 404);
@@ -440,7 +441,7 @@ export const deleteStudent = async (req: Request, res: Response) => {
   }
 };
 
-// Get student statistics
+// Get student statistics - MODIFIED to include photoData in some queries
 export const getStudentStatistics = async (req: Request, res: Response) => {
   try {
     const totalStudents = await Student.countDocuments();
@@ -512,6 +513,12 @@ export const getStudentStatistics = async (req: Request, res: Response) => {
       { $sort: { count: -1 } }
     ]);
 
+    // Recent students - INCLUDES PHOTODATA for admin panel
+    const recentStudents = await Student.find()
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select('firstName lastName gibyGubayeId photo photoData createdAt isActive');
+
     successResponse(res, {
       totalStudents,
       activeStudents,
@@ -521,7 +528,8 @@ export const getStudentStatistics = async (req: Request, res: Response) => {
       departmentStats,
       batchStats,
       genderStats,
-      regionStats
+      regionStats,
+      recentStudents
     }, 'Statistics retrieved successfully');
   } catch (error: any) {
     errorResponse(res, error.message, 500);

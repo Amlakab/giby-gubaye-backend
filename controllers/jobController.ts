@@ -71,9 +71,12 @@ export const getJobs = async (req: Request, res: Response) => {
       }
     }
 
-    // Execute query
+    // Execute query - UPDATED TO INCLUDE ALL NECESSARY FIELDS
     const jobs = await Job.find(query)
-      .populate('studentId', 'firstName middleName lastName phone email college department region photo numberOfJob isActive')
+      .populate({
+        path: 'studentId',
+        select: 'firstName middleName lastName motherName phone email gender block dorm university college department batch region zone wereda kebele church authority job motherTongue additionalLanguages attendsCourse courseName courseChurch dateOfBirth emergencyContact photo photoData isActive createdAt updatedAt numberOfJob gibyGubayeId'
+      })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit))
@@ -89,6 +92,7 @@ export const getJobs = async (req: Request, res: Response) => {
           currentPage: Number(page),
           totalPages: Math.ceil(totalJobs / Number(limit)),
           totalJobs,
+          limit: Number(limit),
           hasNext: Number(page) * Number(limit) < totalJobs,
           hasPrev: Number(page) > 1,
         },
@@ -132,6 +136,7 @@ export const getEligibleStudents = async (req: Request, res: Response) => {
     }
 
     const students = await Student.find(query)
+      .select('firstName middleName lastName phone email college department photo photoData numberOfJob gibyGubayeId')
       .sort({ firstName: 1 })
       .limit(50);
 
@@ -214,8 +219,11 @@ export const assignJob = async (req: Request, res: Response) => {
     student.numberOfJob += 1;
     await student.save();
 
-    // Populate student data for response
-    const populatedJob = await Job.findById(job._id).populate('studentId');
+    // Populate student data for response - UPDATED TO INCLUDE ALL FIELDS
+    const populatedJob = await Job.findById(job._id).populate({
+      path: 'studentId',
+      select: 'firstName middleName lastName motherName phone email gender block dorm university college department batch region zone wereda kebele church authority job motherTongue additionalLanguages attendsCourse courseName courseChurch dateOfBirth emergencyContact photo photoData isActive createdAt updatedAt numberOfJob gibyGubayeId'
+    });
 
     res.status(201).json({
       success: true,
@@ -238,7 +246,10 @@ export const updateJob = async (req: Request, res: Response) => {
     const { sub_class, type, background } = req.body;
     const userRole = (req as any).user?.role;
 
-    const job = await Job.findById(id).populate('studentId');
+    const job = await Job.findById(id).populate({
+      path: 'studentId',
+      select: 'firstName middleName lastName motherName phone email gender block dorm university college department batch region zone wereda kebele church authority job motherTongue additionalLanguages attendsCourse courseName courseChurch dateOfBirth emergencyContact photo photoData isActive createdAt updatedAt numberOfJob gibyGubayeId'
+    });
     
     if (!job) {
       return res.status(404).json({
@@ -350,14 +361,19 @@ export const getAllJobsByStudentId = async (req: Request, res: Response) => {
       });
     }
 
-    // Find all jobs for this student (across all classes)
+    // Find all jobs for this student (across all classes) - UPDATED TO INCLUDE ALL FIELDS
     const jobs = await Job.find({ studentId })
-      .populate('studentId', 'firstName middleName lastName phone email college department region photo numberOfJob isActive')
+      .populate({
+        path: 'studentId',
+        select: 'firstName middleName lastName motherName phone email gender block dorm university college department batch region zone wereda kebele church authority job motherTongue additionalLanguages attendsCourse courseName courseChurch dateOfBirth emergencyContact photo photoData isActive createdAt updatedAt numberOfJob gibyGubayeId'
+      })
       .sort({ createdAt: -1 })
       .exec();
 
     // Get student info
-    const student = await Student.findById(studentId);
+    const student = await Student.findById(studentId)
+      .select('firstName middleName lastName motherName phone email gender block dorm university college department batch region zone wereda kebele church authority job motherTongue additionalLanguages attendsCourse courseName courseChurch dateOfBirth emergencyContact photo photoData isActive createdAt updatedAt numberOfJob gibyGubayeId');
+    
     if (!student) {
       return res.status(404).json({
         success: false,
@@ -369,21 +385,7 @@ export const getAllJobsByStudentId = async (req: Request, res: Response) => {
       success: true,
       data: {
         jobs,
-        studentInfo: {
-          _id: student._id,
-          firstName: student.firstName,
-          middleName: student.middleName,
-          lastName: student.lastName,
-          fullName: `${student.firstName} ${student.lastName}`,
-          phone: student.phone,
-          email: student.email,
-          college: student.college,
-          department: student.department,
-          region: student.region,
-          numberOfJob: student.numberOfJob,
-          isActive: student.isActive,
-          createdAt: student.createdAt,
-        },
+        studentInfo: student,
       },
     });
   } catch (error: any) {
