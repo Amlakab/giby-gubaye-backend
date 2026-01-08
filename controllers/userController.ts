@@ -4,7 +4,7 @@ import Student from '../models/Student';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 
-// Get all users with filtering and pagination
+// Get all users with filtering and pagination - UPDATED WITH PHOTODATA
 export const getAllUsers = async (req: Request, res: Response) => {
   try {
     const { 
@@ -44,9 +44,12 @@ export const getAllUsers = async (req: Request, res: Response) => {
       ];
     }
 
-    // Execute query with student population
+    // Execute query with FULL student population - INCLUDING PHOTODATA
     const users = await User.find(query)
-      .populate('studentId', 'firstName middleName lastName phone email college department region photo')
+      .populate({
+        path: 'studentId',
+        select: 'firstName middleName lastName phone email gender motherName block dorm university college department batch region zone wereda kebele church authority job motherTongue additionalLanguages dateOfBirth emergencyContact attendsCourse courseName courseChurch isActive createdAt updatedAt photo photoData gibyGubayeId'
+      })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit))
@@ -76,7 +79,7 @@ export const getAllUsers = async (req: Request, res: Response) => {
   }
 };
 
-// Get single user by ID
+// Get single user by ID - UPDATED WITH PHOTODATA
 export const getUser = async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
@@ -89,7 +92,10 @@ export const getUser = async (req: Request, res: Response) => {
     }
 
     const user = await User.findById(userId)
-      .populate('studentId', 'firstName middleName lastName phone email college department region photo');
+      .populate({
+        path: 'studentId',
+        select: 'firstName middleName lastName phone email gender motherName block dorm university college department batch region zone wereda kebele church authority job motherTongue additionalLanguages dateOfBirth emergencyContact attendsCourse courseName courseChurch isActive createdAt updatedAt photo photoData gibyGubayeId'
+      });
 
     if (!user) {
       return res.status(404).json({
@@ -111,10 +117,10 @@ export const getUser = async (req: Request, res: Response) => {
   }
 };
 
-// Create new user
+// Create new user - UPDATED
 export const createUser = async (req: Request, res: Response) => {
   try {
-    const {name, email, phone, background, studentId, password, role } = req.body;
+    const { name, email, phone, background, studentId, password, role } = req.body;
 
     // Validate student exists
     const student = await Student.findById(studentId);
@@ -139,7 +145,13 @@ export const createUser = async (req: Request, res: Response) => {
       });
     }
 
-    const gibyGubayeId = student.gibyGubayeId;
+    // Get gibyGubayeId from student
+    const gibyGubayeId = student.gibyGubayeId || '';
+
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
     // Create new user
     const user = new User({
       gibyGubayeId,
@@ -148,7 +160,7 @@ export const createUser = async (req: Request, res: Response) => {
       phone,
       background,
       studentId,
-      password,
+      password: hashedPassword,
       role: role || 'user',
       isActive: true,
     });
@@ -157,7 +169,10 @@ export const createUser = async (req: Request, res: Response) => {
 
     // Populate student data for response
     const populatedUser = await User.findById(user._id)
-      .populate('studentId', 'firstName middleName lastName phone email college department region photo');
+      .populate({
+        path: 'studentId',
+        select: 'firstName middleName lastName phone email gender motherName block dorm university college department batch region zone wereda kebele church authority job motherTongue additionalLanguages dateOfBirth emergencyContact attendsCourse courseName courseChurch isActive createdAt updatedAt photo photoData gibyGubayeId'
+      });
 
     res.status(201).json({
       success: true,
@@ -173,7 +188,7 @@ export const createUser = async (req: Request, res: Response) => {
   }
 };
 
-// Update user status (active/inactive)
+// Update user status (active/inactive) - UPDATED
 export const updateUserStatus = async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
@@ -183,7 +198,10 @@ export const updateUserStatus = async (req: Request, res: Response) => {
       userId,
       { isActive },
       { new: true }
-    ).populate('studentId', 'firstName middleName lastName phone email college department region photo');
+    ).populate({
+      path: 'studentId',
+      select: 'firstName middleName lastName phone email gender motherName block dorm university college department batch region zone wereda kebele church authority job motherTongue additionalLanguages dateOfBirth emergencyContact attendsCourse courseName courseChurch isActive createdAt updatedAt photo photoData gibyGubayeId'
+    });
 
     if (!user) {
       return res.status(404).json({
@@ -206,7 +224,7 @@ export const updateUserStatus = async (req: Request, res: Response) => {
   }
 };
 
-// Update user information
+// Update user information - UPDATED
 export const updateUser = async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
@@ -266,7 +284,10 @@ export const updateUser = async (req: Request, res: Response) => {
         role,
       },
       { new: true }
-    ).populate('studentId', 'firstName middleName lastName phone email college department region photo');
+    ).populate({
+      path: 'studentId',
+      select: 'firstName middleName lastName phone email gender motherName block dorm university college department batch region zone wereda kebele church authority job motherTongue additionalLanguages dateOfBirth emergencyContact attendsCourse courseName courseChurch isActive createdAt updatedAt photo photoData gibyGubayeId'
+    });
 
     res.json({
       success: true,
@@ -342,7 +363,7 @@ export const deleteUser = async (req: Request, res: Response) => {
   }
 };
 
-// Get user statistics
+// Get user statistics - UPDATED
 export const getUserStatistics = async (req: Request, res: Response) => {
   try {
     const totalUsers = await User.countDocuments();
@@ -362,6 +383,15 @@ export const getUserStatistics = async (req: Request, res: Response) => {
       },
     ]);
 
+    // Get recent users with student data
+    const recentUsers = await User.find()
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .populate({
+        path: 'studentId',
+        select: 'firstName lastName photo photoData gibyGubayeId'
+      });
+
     res.json({
       success: true,
       data: {
@@ -369,6 +399,7 @@ export const getUserStatistics = async (req: Request, res: Response) => {
         activeUsers,
         blockedUsers,
         roles,
+        recentUsers
       },
     });
   } catch (error: any) {
