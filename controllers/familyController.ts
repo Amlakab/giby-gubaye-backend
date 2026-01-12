@@ -1319,3 +1319,592 @@ export const getUserFamilies = async (req: Request, res: Response) => {
     errorResponse(res, error.message, 500);
   }
 };
+
+// Add this function to the familyController.ts file
+
+export const autoAssignChildren = async (req: Request, res: Response) => {
+  try {
+    const {
+      mode, // 'homogeneous' | 'heterogeneous'
+      targetBatch,
+      maxChildrenPerFamily = 4,
+      considerGenderBalance = true,
+      considerAge = true,
+      addressLevel = 'kebele' // for homogeneous mode: 'kebele' | 'wereda' | 'zone' | 'region'
+    } = req.body;
+
+    const userId = (req as any).user?._id;
+    const userRole = (req as any).user?.role;
+
+    // Validate required parameters
+    if (!mode || !targetBatch) {
+      return errorResponse(res, 'Mode and target batch are required', 400);
+    }
+
+    if (mode !== 'homogeneous' && mode !== 'heterogeneous') {
+      return errorResponse(res, 'Mode must be either "homogeneous" or "heterogeneous"', 400);
+    }
+
+    // Step 1: Find eligible families (with both parents)
+    const eligibleFamilies = await Family.find({
+      'grandParents.families': { $exists: true, $not: { $size: 0 } },
+      status: 'current'
+    })
+      .populate('leader')
+      .populate('coLeader')
+      .populate('secretary')
+      .populate({
+        path: 'grandParents.grandFather grandParents.grandMother',
+        select: 'firstName lastName gender batch'
+      })
+      .populate({
+        path: 'grandParents.families.father.student grandParents.families.mother.student',
+        select: 'firstName lastName gender batch region zone wereda kebele dateOfBirth'
+      })
+      .populate({
+        path: 'grandParents.families.children.student',
+        select: 'firstName lastName gender batch region zone wereda kebele dateOfBirth'
+      })
+      .lean();
+
+    if (eligibleFamilies.length === 0) {
+      return errorResponse(res, 'No eligible families found (families with both parents)', 400);
+    }
+
+    // Get ALL students from the target batch
+    const allStudentsInBatch = await Student.find({
+      batch: targetBatch,
+      isActive: true
+    })
+    .select('firstName lastName gender batch region zone wereda kebele dateOfBirth gibyGubayeId')
+    .lean();
+    
+    if (allStudentsInBatch.length === 0) {
+      return errorResponse(res, `No students found in batch ${targetBatch}`, 400);
+    }
+
+    console.log(`Total students in batch ${targetBatch}: ${allStudentsInBatch.length}`);
+    console.log(`Total eligible families: ${eligibleFamilies.length}`);
+
+    // Define StudentInfo type
+    type StudentInfo = {
+      _id: mongoose.Types.ObjectId;
+      firstName: string;
+      lastName: string;
+      gender: 'male' | 'female';
+      batch: string;
+      region?: string;
+      zone?: string;
+      wereda?: string;
+      kebele?: string;
+      dateOfBirth?: Date;
+      gibyGubayeId?: string;
+    };
+
+    // Step 2: Prepare family data structures
+    interface FamilyAssignment {
+      familyId: string;
+      familyObject: any;
+      gpIndex: number;
+      familyIndex: number;
+      father: StudentInfo;
+      mother: StudentInfo;
+      existingChildren: any[];
+      address: {
+        region: string;
+        zone: string;
+        wereda: string;
+        kebele: string;
+      };
+      genderStats: {
+        sons: number;
+        daughters: number;
+      };
+      capacity: number;
+      commonAddressLevel?: string;
+      commonAddressValue?: string;
+      parentsFromTargetBatch: boolean;
+      // Track students already in THIS specific family (to avoid duplicates within same family)
+      studentsInThisFamily: Set<string>;
+    }
+
+    const familyAssignments: FamilyAssignment[] = [];
+
+    // Process each eligible family
+    for (const family of eligibleFamilies) {
+      const familyData = family as any;
+      
+      if (familyData.grandParents) {
+        for (let gpIndex = 0; gpIndex < familyData.grandParents.length; gpIndex++) {
+          const gp = familyData.grandParents[gpIndex];
+          
+          if (gp.families) {
+            for (let familyIndex = 0; familyIndex < gp.families.length; familyIndex++) {
+              const familyMember = gp.families[familyIndex];
+              
+              // Get parents
+              const father = familyMember.father?.student as StudentInfo;
+              const mother = familyMember.mother?.student as StudentInfo;
+              
+              if (!father || !mother) {
+                continue;
+              }
+
+              // Check if parents are from target batch
+              const parentsFromTargetBatch = father.batch === targetBatch && mother.batch === targetBatch;
+              
+              // Skip families that don't allow other batches and parents are not from target batch
+              if (!familyData.allowOtherBatches && !parentsFromTargetBatch) {
+                continue;
+              }
+
+              // Calculate gender stats
+              const existingChildren = familyMember.children || [];
+              const sons = existingChildren.filter((c: any) => c.relationship === 'son').length;
+              const daughters = existingChildren.filter((c: any) => c.relationship === 'daughter').length;
+              
+              // Create a set of student IDs already in THIS family
+              const studentsInThisFamily = new Set<string>();
+              
+              // Add parents to the set (can't be children in their own family)
+              studentsInThisFamily.add(father._id.toString());
+              studentsInThisFamily.add(mother._id.toString());
+              
+              // Add existing children to the set
+              existingChildren.forEach((child: any) => {
+                if (child.student) {
+                  studentsInThisFamily.add(child.student._id.toString());
+                }
+              });
+              
+              // Calculate common address level for homogeneous mode
+              let commonAddressLevel: string | undefined = undefined;
+              let commonAddressValue: string | undefined = undefined;
+              
+              if (father.region && mother.region && father.region === mother.region) {
+                commonAddressLevel = 'region';
+                commonAddressValue = father.region;
+                
+                if (father.zone && mother.zone && father.zone === mother.zone) {
+                  commonAddressLevel = 'zone';
+                  commonAddressValue = father.zone;
+                  
+                  if (father.wereda && mother.wereda && father.wereda === mother.wereda) {
+                    commonAddressLevel = 'wereda';
+                    commonAddressValue = father.wereda;
+                    
+                    if (father.kebele && mother.kebele && father.kebele === mother.kebele) {
+                      commonAddressLevel = 'kebele';
+                      commonAddressValue = father.kebele;
+                    }
+                  }
+                }
+              }
+
+              familyAssignments.push({
+                familyId: familyData._id.toString(),
+                familyObject: familyData,
+                gpIndex,
+                familyIndex,
+                father,
+                mother,
+                existingChildren,
+                address: {
+                  region: father.region || '',
+                  zone: father.zone || '',
+                  wereda: father.wereda || '',
+                  kebele: father.kebele || ''
+                },
+                genderStats: { sons, daughters },
+                capacity: Math.max(0, maxChildrenPerFamily - existingChildren.length),
+                commonAddressLevel,
+                commonAddressValue,
+                parentsFromTargetBatch,
+                studentsInThisFamily
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Filter out families with no capacity
+    let eligibleFamilyAssignments = familyAssignments.filter(f => f.capacity > 0);
+    
+    // For homogeneous mode, also filter families that have no common address
+    if (mode === 'homogeneous') {
+      eligibleFamilyAssignments = eligibleFamilyAssignments.filter(f => f.commonAddressLevel);
+    }
+
+    if (eligibleFamilyAssignments.length === 0) {
+      return errorResponse(res, 'No families available for assignment with current criteria', 400);
+    }
+
+    // Step 3: Prepare all available students from the target batch
+    // We start with ALL students in the batch
+    const allAvailableStudents = allStudentsInBatch as unknown as StudentInfo[];
+    
+    console.log(`All students available from batch ${targetBatch}: ${allAvailableStudents.length}`);
+
+    // Step 4: Sort families by priority
+    // Priority 1: Families with NO children
+    // Priority 2: Families with fewest children
+    // Priority 3: Families with worst gender imbalance
+    eligibleFamilyAssignments.sort((a, b) => {
+      // First by number of existing children (ascending)
+      const aTotalChildren = a.existingChildren.length;
+      const bTotalChildren = b.existingChildren.length;
+      
+      if (aTotalChildren !== bTotalChildren) {
+        return aTotalChildren - bTotalChildren;
+      }
+      
+      // Then by gender imbalance (descending imbalance)
+      const aImbalance = Math.abs(a.genderStats.sons - a.genderStats.daughters);
+      const bImbalance = Math.abs(b.genderStats.sons - b.genderStats.daughters);
+      
+      return bImbalance - aImbalance;
+    });
+
+    // Step 5: Assignment algorithm
+    interface Assignment {
+      familyId: string;
+      gpIndex: number;
+      familyIndex: number;
+      studentId: string;
+      student: StudentInfo;
+      relationship: 'son' | 'daughter';
+      birthOrder: number;
+      addressMatch?: string;
+      diversityScore?: number;
+    }
+
+    const assignments: Assignment[] = [];
+    const failedAssignments: Array<{
+      familyId: string;
+      reason: string;
+    }> = [];
+
+    // Helper function to calculate diversity score
+    const calculateDiversityScore = (child: StudentInfo, father: StudentInfo, mother: StudentInfo): number => {
+      let score = 0;
+      
+      // Different region (most diverse)
+      if (child.region !== father.region && child.region !== mother.region) {
+        score += 4;
+      }
+      // Same region, different zone
+      else if (child.region === father.region || child.region === mother.region) {
+        if (child.zone && (child.zone !== father.zone || child.zone !== mother.zone)) {
+          score += 3;
+        }
+        // Same zone, different wereda
+        else if (child.zone && child.zone === father.zone && child.zone === mother.zone) {
+          if (child.wereda && (child.wereda !== father.wereda || child.wereda !== mother.wereda)) {
+            score += 2;
+          }
+          // Same wereda, different kebele
+          else if (child.wereda && child.wereda === father.wereda && child.wereda === mother.wereda) {
+            if (child.kebele && (child.kebele !== father.kebele || child.kebele !== mother.kebele)) {
+              score += 1;
+            }
+          }
+        }
+      }
+      
+      return score;
+    };
+
+    // Helper function to check age appropriateness
+    const isAgeAppropriate = (child: StudentInfo, father: StudentInfo, mother: StudentInfo): boolean => {
+      if (!considerAge || !child.dateOfBirth || !father.dateOfBirth || !mother.dateOfBirth) {
+        return true;
+      }
+      
+      const childAge = new Date().getFullYear() - new Date(child.dateOfBirth).getFullYear();
+      const fatherAge = new Date().getFullYear() - new Date(father.dateOfBirth).getFullYear();
+      const motherAge = new Date().getFullYear() - new Date(mother.dateOfBirth).getFullYear();
+      
+      // Prefer children younger than parents, but allow similar age if necessary
+      return childAge <= Math.max(fatherAge, motherAge) + 5;
+    };
+
+    // Helper function to get gender preference for family
+    const getGenderPreference = (genderStats: { sons: number; daughters: number }): 'male' | 'female' | 'any' => {
+      if (!considerGenderBalance) return 'any';
+      
+      if (genderStats.sons > genderStats.daughters) {
+        return 'female'; // Need more daughters
+      } else if (genderStats.daughters > genderStats.sons) {
+        return 'male'; // Need more sons
+      } else {
+        return 'any'; // Balanced
+      }
+    };
+
+    // Main assignment loop
+    for (const familyAssignment of eligibleFamilyAssignments) {
+      if (familyAssignment.capacity <= 0) continue;
+      
+      let assignedCount = 0;
+      const availableStudentsForThisFamily = [...allAvailableStudents]; // Copy all students
+      
+      while (assignedCount < familyAssignment.capacity && availableStudentsForThisFamily.length > 0) {
+        let bestCandidate: StudentInfo | null = null;
+        let bestCandidateIndex: number = -1;
+        let bestScore = -1;
+        let bestAddressMatch: string | undefined = undefined;
+        
+        // Find best candidate for this family
+        for (let i = 0; i < availableStudentsForThisFamily.length; i++) {
+          const student = availableStudentsForThisFamily[i];
+          
+          // Skip if student is already in this family (as parent or existing child)
+          if (familyAssignment.studentsInThisFamily.has(student._id.toString())) {
+            continue;
+          }
+          
+          // Check batch compliance
+          if (!familyAssignment.familyObject.allowOtherBatches) {
+            // If family doesn't allow other batches, children must be from target batch
+            if (student.batch !== targetBatch) {
+              continue;
+            }
+          }
+          
+          // Check age appropriateness
+          if (!isAgeAppropriate(student, familyAssignment.father, familyAssignment.mother)) {
+            continue;
+          }
+          
+          // Check gender preference
+          const genderPreference = getGenderPreference(familyAssignment.genderStats);
+          if (genderPreference !== 'any' && student.gender !== genderPreference) {
+            continue;
+          }
+          
+          let score = 0;
+          let addressMatch: string | undefined = undefined;
+          
+          if (mode === 'homogeneous' && familyAssignment.commonAddressLevel) {
+            // For homogeneous: match address level
+            const studentAddress = student[familyAssignment.commonAddressLevel as keyof StudentInfo] as string | undefined;
+            
+            if (studentAddress && studentAddress === familyAssignment.commonAddressValue) {
+              score = 100; // Perfect match
+              addressMatch = `Matched ${familyAssignment.commonAddressLevel}: ${studentAddress}`;
+            } else {
+              // Try next level if exact match not found
+              const levels = ['kebele', 'wereda', 'zone', 'region'];
+              const currentLevelIndex = levels.indexOf(familyAssignment.commonAddressLevel);
+              
+              for (let j = currentLevelIndex + 1; j < levels.length; j++) {
+                const level = levels[j];
+                const studentValue = student[level as keyof StudentInfo] as string | undefined;
+                const familyValue = familyAssignment.father[level as keyof StudentInfo] as string | undefined;
+                
+                if (studentValue && familyValue && studentValue === familyValue) {
+                  score = 50 - (j * 10); // Lower score for less specific match
+                  addressMatch = `Matched ${level}: ${studentValue}`;
+                  break;
+                }
+              }
+            }
+            
+            if (score === 0) {
+              continue; // No address match at any level
+            }
+          } else {
+            // For heterogeneous: calculate diversity score
+            score = calculateDiversityScore(student, familyAssignment.father, familyAssignment.mother);
+            if (score === 0) {
+              continue; // Avoid zero diversity (exact same address)
+            }
+          }
+          
+          // Tie-breakers
+          // 1. Age: prefer younger
+          let tieBreakerScore = 0;
+          if (student.dateOfBirth) {
+            const age = new Date().getFullYear() - new Date(student.dateOfBirth).getFullYear();
+            tieBreakerScore += (30 - age) * 0.1; // Younger gets higher score
+          }
+          
+          // 2. Gender need
+          const genderNeed = Math.abs(familyAssignment.genderStats.sons - familyAssignment.genderStats.daughters);
+          if (genderPreference === student.gender) {
+            tieBreakerScore += genderNeed * 0.05;
+          }
+          
+          const totalScore = score + tieBreakerScore;
+          
+          if (totalScore > bestScore) {
+            bestScore = totalScore;
+            bestCandidate = student;
+            bestCandidateIndex = i;
+            bestAddressMatch = addressMatch;
+          }
+        }
+        
+        if (!bestCandidate || bestCandidateIndex === -1) {
+          // No suitable candidate found for this family
+          failedAssignments.push({
+            familyId: familyAssignment.familyId,
+            reason: `No suitable students available matching criteria for family ${familyAssignment.familyId}`
+          });
+          break;
+        }
+        
+        // Determine relationship based on gender
+        const relationship: 'son' | 'daughter' = bestCandidate.gender === 'male' ? 'son' : 'daughter';
+        
+        // Calculate birth order
+        const birthOrder = familyAssignment.existingChildren.length + assignedCount + 1;
+        
+        // Create assignment object
+        const assignment: Assignment = {
+          familyId: familyAssignment.familyId,
+          gpIndex: familyAssignment.gpIndex,
+          familyIndex: familyAssignment.familyIndex,
+          studentId: bestCandidate._id.toString(),
+          student: bestCandidate,
+          relationship,
+          birthOrder
+        };
+
+        // Add mode-specific properties
+        if (mode === 'homogeneous') {
+          assignment.addressMatch = bestAddressMatch;
+        } else {
+          assignment.diversityScore = bestScore;
+        }
+        
+        assignments.push(assignment);
+        
+        // Remove the assigned student from this family's available pool
+        // (But the student can still be assigned to other families)
+        availableStudentsForThisFamily.splice(bestCandidateIndex, 1);
+        
+        // Add student to this family's set (to avoid assigning same student twice to same family)
+        familyAssignment.studentsInThisFamily.add(bestCandidate._id.toString());
+        
+        // Update family gender stats for next iteration
+        if (relationship === 'son') {
+          familyAssignment.genderStats.sons++;
+        } else {
+          familyAssignment.genderStats.daughters++;
+        }
+        
+        assignedCount++;
+      }
+    }
+
+    // Step 6: Apply assignments to database (in transaction)
+    const session = await mongoose.startSession();
+    
+    try {
+      session.startTransaction();
+      
+      const assignmentResults: any[] = [];
+      
+      for (const assignment of assignments) {
+        const family = await Family.findById(assignment.familyId).session(session);
+        
+        if (!family) {
+          throw new Error(`Family ${assignment.familyId} not found`);
+        }
+        
+        const grandParentPath = `grandParents.${assignment.gpIndex}.families.${assignment.familyIndex}.children`;
+        
+        const childData = {
+          student: new mongoose.Types.ObjectId(assignment.studentId),
+          relationship: assignment.relationship,
+          birthOrder: assignment.birthOrder,
+          addedAt: new Date()
+        };
+        
+        await Family.findByIdAndUpdate(
+          assignment.familyId,
+          {
+            $push: {
+              [grandParentPath]: childData
+            }
+          },
+          { session, new: true }
+        );
+        
+        assignmentResults.push({
+          familyTitle: family.title,
+          studentName: `${assignment.student.firstName} ${assignment.student.lastName}`,
+          studentId: assignment.student.gibyGubayeId || 'N/A',
+          relationship: assignment.relationship,
+          birthOrder: assignment.birthOrder,
+          addressMatch: assignment.addressMatch,
+          diversityScore: assignment.diversityScore
+        });
+      }
+      
+      await session.commitTransaction();
+      
+      // Step 7: Prepare statistics
+      const totalAssigned = assignments.length;
+      const totalFamiliesAffected = new Set(assignments.map(a => a.familyId)).size;
+      const remainingStudents = allAvailableStudents.length; // Students can be reused in other families
+      
+      // Calculate gender distribution
+      const sonsAssigned = assignments.filter(a => a.relationship === 'son').length;
+      const daughtersAssigned = assignments.filter(a => a.relationship === 'daughter').length;
+      
+      // Calculate address match quality for homogeneous mode
+      let matchQuality = 0;
+      if (mode === 'homogeneous') {
+        const exactMatches = assignments.filter(a => a.addressMatch?.includes('Matched')).length;
+        matchQuality = totalAssigned > 0 ? exactMatches / totalAssigned : 0;
+      }
+      
+      // Calculate average diversity score for heterogeneous mode
+      let averageDiversity = 0;
+      if (mode === 'heterogeneous') {
+        const totalScore = assignments.reduce((sum, a) => sum + (a.diversityScore || 0), 0);
+        averageDiversity = totalAssigned > 0 ? totalScore / totalAssigned : 0;
+      }
+      
+      // Get unique students assigned (a student can be assigned to multiple families)
+      const uniqueStudentIds = new Set(assignments.map(a => a.studentId));
+      
+      successResponse(res, {
+        success: true,
+        message: `Successfully assigned ${totalAssigned} children to ${totalFamiliesAffected} families (${uniqueStudentIds.size} unique students)`,
+        statistics: {
+          totalAssigned,
+          totalFamiliesAffected,
+          uniqueStudentsAssigned: uniqueStudentIds.size,
+          genderDistribution: {
+            sons: sonsAssigned,
+            daughters: daughtersAssigned,
+            balance: Math.abs(sonsAssigned - daughtersAssigned)
+          },
+          ...(mode === 'homogeneous' ? {
+            addressMatchQuality: matchQuality,
+            qualityLevel: matchQuality >= 0.8 ? 'Excellent' : matchQuality >= 0.5 ? 'Good' : 'Poor'
+          } : {
+            averageDiversityScore: averageDiversity,
+            diversityLevel: averageDiversity >= 3 ? 'High' : averageDiversity >= 2 ? 'Medium' : 'Low'
+          })
+        },
+        assignments: assignmentResults,
+        failedAssignments: failedAssignments.length > 0 ? failedAssignments : undefined
+      }, 'Children assigned successfully');
+      
+    } catch (error: any) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
+    
+  } catch (error: any) {
+    console.error('Error in autoAssignChildren:', error);
+    errorResponse(res, error.message || 'Failed to auto-assign children', 500);
+  }
+};

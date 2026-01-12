@@ -12,7 +12,8 @@ import {
   getFamilyFilterOptions,
   getStudentsForFamilySelection,
   getAllBatches,
-  getUserFamilies
+  getUserFamilies,
+  autoAssignChildren
 } from '../controllers/familyController';
 import { authenticate, authorize } from '../middleware/auth';
 
@@ -27,6 +28,9 @@ router.use(authenticate);
 // Filter and selection routes
 router.get('/filter-options', getFamilyFilterOptions);
 router.get('/students/selection', getStudentsForFamilySelection);
+
+// Add this route after the existing routes, before export
+router.post('/auto-assign-children', autoAssignChildren);
 
 // Family CRUD routes
 router.get('/', getAllFamilies);
