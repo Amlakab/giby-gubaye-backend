@@ -15,6 +15,7 @@ import agendaRoutes from './routes/agendaRoutes';
 import transactionRoutes from './routes/transactions';
 import walletRoutes from './routes/wallet';
 import feedbackRoutes from './routes/feedback';
+import familyRoutes from './routes/familyRoutes';
 import { connectDB } from './config/database';
 import { errorHandler } from './middleware/errorHandler';
 import { serveStudentPhoto } from './controllers/studentController';
@@ -76,6 +77,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/agent', agentRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/accountants', accountantRoutes);
+app.use('/api/families', familyRoutes);
 
 // Enhanced health check endpoint
 app.get('/api/health', (req, res) => {
