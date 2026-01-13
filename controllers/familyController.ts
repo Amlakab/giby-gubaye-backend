@@ -1322,6 +1322,8 @@ export const getUserFamilies = async (req: Request, res: Response) => {
 
 // Add this function to the familyController.ts file
 
+// Add this function to the familyController.ts file
+
 export const autoAssignChildren = async (req: Request, res: Response) => {
   try {
     const {
@@ -1359,11 +1361,11 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
       })
       .populate({
         path: 'grandParents.families.father.student grandParents.families.mother.student',
-        select: 'firstName lastName gender batch region zone wereda kebele dateOfBirth'
+        select: 'firstName lastName gender batch region zone wereda kebele dateOfBirth gibyGubayeId'
       })
       .populate({
         path: 'grandParents.families.children.student',
-        select: 'firstName lastName gender batch region zone wereda kebele dateOfBirth'
+        select: 'firstName lastName gender batch region zone wereda kebele dateOfBirth gibyGubayeId'
       })
       .lean();
 
@@ -1371,7 +1373,7 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
       return errorResponse(res, 'No eligible families found (families with both parents)', 400);
     }
 
-    // Get ALL students from the target batch
+    // Step 2: Get ALL students from the target batch
     const allStudentsInBatch = await Student.find({
       batch: targetBatch,
       isActive: true
@@ -1386,7 +1388,7 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
     console.log(`Total students in batch ${targetBatch}: ${allStudentsInBatch.length}`);
     console.log(`Total eligible families: ${eligibleFamilies.length}`);
 
-    // Define StudentInfo type
+    // Define types
     type StudentInfo = {
       _id: mongoose.Types.ObjectId;
       firstName: string;
@@ -1401,7 +1403,11 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
       gibyGubayeId?: string;
     };
 
-    // Step 2: Prepare family data structures
+    // Step 3: Create a map to track which students are already used in this auto-assignment
+    // This prevents assigning the same student multiple times in this operation
+    const newlyAssignedStudentIds = new Set<string>();
+
+    // Step 4: Prepare family assignments
     interface FamilyAssignment {
       familyId: string;
       familyObject: any;
@@ -1424,8 +1430,8 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
       commonAddressLevel?: string;
       commonAddressValue?: string;
       parentsFromTargetBatch: boolean;
-      // Track students already in THIS specific family (to avoid duplicates within same family)
-      studentsInThisFamily: Set<string>;
+      // Track ALL students already in THIS specific family document
+      studentsInThisFamilyDoc: Set<string>;
     }
 
     const familyAssignments: FamilyAssignment[] = [];
@@ -1434,6 +1440,44 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
     for (const family of eligibleFamilies) {
       const familyData = family as any;
       
+      // Create a set of ALL students already in THIS family document
+      const studentsInThisFamilyDoc = new Set<string>();
+      
+      // Add leaders (family level)
+      studentsInThisFamilyDoc.add(familyData.familyLeader.toString());
+      studentsInThisFamilyDoc.add(familyData.familyCoLeader.toString());
+      studentsInThisFamilyDoc.add(familyData.familySecretary.toString());
+      
+      // Add grand parents
+      if (familyData.grandParents) {
+        for (const gp of familyData.grandParents) {
+          if (gp.grandFather) studentsInThisFamilyDoc.add(gp.grandFather.toString());
+          if (gp.grandMother) studentsInThisFamilyDoc.add(gp.grandMother.toString());
+          
+          // Add ALL parents and children from ALL family pairs in this document
+          if (gp.families) {
+            for (const familyMember of gp.families) {
+              if (familyMember.father?.student) {
+                studentsInThisFamilyDoc.add(familyMember.father.student._id.toString());
+              }
+              if (familyMember.mother?.student) {
+                studentsInThisFamilyDoc.add(familyMember.mother.student._id.toString());
+              }
+              
+              // Add existing children
+              if (familyMember.children) {
+                for (const child of familyMember.children) {
+                  if (child.student) {
+                    studentsInThisFamilyDoc.add(child.student._id.toString());
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      // Now process each family pair
       if (familyData.grandParents) {
         for (let gpIndex = 0; gpIndex < familyData.grandParents.length; gpIndex++) {
           const gp = familyData.grandParents[gpIndex];
@@ -1462,20 +1506,6 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
               const existingChildren = familyMember.children || [];
               const sons = existingChildren.filter((c: any) => c.relationship === 'son').length;
               const daughters = existingChildren.filter((c: any) => c.relationship === 'daughter').length;
-              
-              // Create a set of student IDs already in THIS family
-              const studentsInThisFamily = new Set<string>();
-              
-              // Add parents to the set (can't be children in their own family)
-              studentsInThisFamily.add(father._id.toString());
-              studentsInThisFamily.add(mother._id.toString());
-              
-              // Add existing children to the set
-              existingChildren.forEach((child: any) => {
-                if (child.student) {
-                  studentsInThisFamily.add(child.student._id.toString());
-                }
-              });
               
               // Calculate common address level for homogeneous mode
               let commonAddressLevel: string | undefined = undefined;
@@ -1520,7 +1550,7 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
                 commonAddressLevel,
                 commonAddressValue,
                 parentsFromTargetBatch,
-                studentsInThisFamily
+                studentsInThisFamilyDoc: new Set(studentsInThisFamilyDoc) // Copy for this family pair
               });
             }
           }
@@ -1540,16 +1570,9 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
       return errorResponse(res, 'No families available for assignment with current criteria', 400);
     }
 
-    // Step 3: Prepare all available students from the target batch
-    // We start with ALL students in the batch
-    const allAvailableStudents = allStudentsInBatch as unknown as StudentInfo[];
-    
-    console.log(`All students available from batch ${targetBatch}: ${allAvailableStudents.length}`);
+    console.log(`Families with capacity: ${eligibleFamilyAssignments.length}`);
 
-    // Step 4: Sort families by priority
-    // Priority 1: Families with NO children
-    // Priority 2: Families with fewest children
-    // Priority 3: Families with worst gender imbalance
+    // Step 5: Sort families by priority
     eligibleFamilyAssignments.sort((a, b) => {
       // First by number of existing children (ascending)
       const aTotalChildren = a.existingChildren.length;
@@ -1566,9 +1589,10 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
       return bImbalance - aImbalance;
     });
 
-    // Step 5: Assignment algorithm
+    // Step 6: Assignment algorithm
     interface Assignment {
       familyId: string;
+      familyTitle: string;
       gpIndex: number;
       familyIndex: number;
       studentId: string;
@@ -1582,6 +1606,7 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
     const assignments: Assignment[] = [];
     const failedAssignments: Array<{
       familyId: string;
+      familyTitle: string;
       reason: string;
     }> = [];
 
@@ -1647,7 +1672,21 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
       if (familyAssignment.capacity <= 0) continue;
       
       let assignedCount = 0;
-      const availableStudentsForThisFamily = [...allAvailableStudents]; // Copy all students
+      const availableStudentsForThisFamily = allStudentsInBatch.filter((student: any) => {
+        const studentId = student._id.toString();
+        
+        // Skip if student is already in THIS family document
+        if (familyAssignment.studentsInThisFamilyDoc.has(studentId)) {
+          return false;
+        }
+        
+        // Skip if student is already assigned in THIS auto-assignment session
+        if (newlyAssignedStudentIds.has(studentId)) {
+          return false;
+        }
+        
+        return true;
+      }) as unknown as StudentInfo[];
       
       while (assignedCount < familyAssignment.capacity && availableStudentsForThisFamily.length > 0) {
         let bestCandidate: StudentInfo | null = null;
@@ -1658,11 +1697,6 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
         // Find best candidate for this family
         for (let i = 0; i < availableStudentsForThisFamily.length; i++) {
           const student = availableStudentsForThisFamily[i];
-          
-          // Skip if student is already in this family (as parent or existing child)
-          if (familyAssignment.studentsInThisFamily.has(student._id.toString())) {
-            continue;
-          }
           
           // Check batch compliance
           if (!familyAssignment.familyObject.allowOtherBatches) {
@@ -1750,7 +1784,8 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
           // No suitable candidate found for this family
           failedAssignments.push({
             familyId: familyAssignment.familyId,
-            reason: `No suitable students available matching criteria for family ${familyAssignment.familyId}`
+            familyTitle: familyAssignment.familyObject.title,
+            reason: `No suitable students available matching criteria`
           });
           break;
         }
@@ -1764,6 +1799,7 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
         // Create assignment object
         const assignment: Assignment = {
           familyId: familyAssignment.familyId,
+          familyTitle: familyAssignment.familyObject.title,
           gpIndex: familyAssignment.gpIndex,
           familyIndex: familyAssignment.familyIndex,
           studentId: bestCandidate._id.toString(),
@@ -1781,12 +1817,11 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
         
         assignments.push(assignment);
         
-        // Remove the assigned student from this family's available pool
-        // (But the student can still be assigned to other families)
-        availableStudentsForThisFamily.splice(bestCandidateIndex, 1);
+        // Add student to tracking sets
+        newlyAssignedStudentIds.add(bestCandidate._id.toString());
         
-        // Add student to this family's set (to avoid assigning same student twice to same family)
-        familyAssignment.studentsInThisFamily.add(bestCandidate._id.toString());
+        // Remove the assigned student from available pool for this family
+        availableStudentsForThisFamily.splice(bestCandidateIndex, 1);
         
         // Update family gender stats for next iteration
         if (relationship === 'son') {
@@ -1799,7 +1834,75 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
       }
     }
 
-    // Step 6: Apply assignments to database (in transaction)
+    // Step 7: Return preview without saving (for review step)
+    const totalAssigned = assignments.length;
+    const totalFamiliesAffected = new Set(assignments.map(a => a.familyId)).size;
+    const uniqueStudentIds = new Set(assignments.map(a => a.studentId));
+    
+    // Calculate gender distribution
+    const sonsAssigned = assignments.filter(a => a.relationship === 'son').length;
+    const daughtersAssigned = assignments.filter(a => a.relationship === 'daughter').length;
+    
+    // Calculate address match quality for homogeneous mode
+    let matchQuality = 0;
+    if (mode === 'homogeneous') {
+      const exactMatches = assignments.filter(a => a.addressMatch?.includes('Matched')).length;
+      matchQuality = totalAssigned > 0 ? exactMatches / totalAssigned : 0;
+    }
+    
+    // Calculate average diversity score for heterogeneous mode
+    let averageDiversity = 0;
+    if (mode === 'heterogeneous') {
+      const totalScore = assignments.reduce((sum, a) => sum + (a.diversityScore || 0), 0);
+      averageDiversity = totalAssigned > 0 ? totalScore / totalAssigned : 0;
+    }
+    
+    successResponse(res, {
+      preview: true,
+      assignments,
+      statistics: {
+        totalAssigned,
+        totalFamiliesAffected,
+        uniqueStudentsAssigned: uniqueStudentIds.size,
+        genderDistribution: {
+          sons: sonsAssigned,
+          daughters: daughtersAssigned,
+          balance: Math.abs(sonsAssigned - daughtersAssigned)
+        },
+        ...(mode === 'homogeneous' ? {
+          addressMatchQuality: matchQuality,
+          qualityLevel: matchQuality >= 0.8 ? 'Excellent' : matchQuality >= 0.5 ? 'Good' : 'Poor'
+        } : {
+          averageDiversityScore: averageDiversity,
+          diversityLevel: averageDiversity >= 3 ? 'High' : averageDiversity >= 2 ? 'Medium' : 'Low'
+        })
+      },
+      configuration: {
+        mode,
+        targetBatch,
+        maxChildrenPerFamily,
+        considerGenderBalance,
+        considerAge,
+        addressLevel
+      },
+      failedAssignments: failedAssignments.length > 0 ? failedAssignments : undefined
+    }, 'Preview generated successfully. Review and confirm to save.');
+    
+  } catch (error: any) {
+    console.error('Error in autoAssignChildren:', error);
+    errorResponse(res, error.message || 'Failed to auto-assign children', 500);
+  }
+};
+
+// Add this new endpoint to execute the assignments after review
+export const executeAutoAssignChildren = async (req: Request, res: Response) => {
+  try {
+    const { assignments } = req.body;
+    
+    if (!Array.isArray(assignments) || assignments.length === 0) {
+      return errorResponse(res, 'No assignments to execute', 400);
+    }
+
     const session = await mongoose.startSession();
     
     try {
@@ -1808,23 +1911,52 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
       const assignmentResults: any[] = [];
       
       for (const assignment of assignments) {
-        const family = await Family.findById(assignment.familyId).session(session);
+        const { familyId, gpIndex, familyIndex, studentId, relationship, birthOrder } = assignment;
+        
+        const family = await Family.findById(familyId).session(session);
         
         if (!family) {
-          throw new Error(`Family ${assignment.familyId} not found`);
+          throw new Error(`Family ${familyId} not found`);
         }
         
-        const grandParentPath = `grandParents.${assignment.gpIndex}.families.${assignment.familyIndex}.children`;
+        // Validate that student is not already in this family
+        const studentIdStr = studentId.toString();
+        const familyStudentIds = new Set<string>();
+        
+        // Collect all student IDs in this family
+        familyStudentIds.add(family.familyLeader.toString());
+        familyStudentIds.add(family.familyCoLeader.toString());
+        familyStudentIds.add(family.familySecretary.toString());
+        
+        for (const gp of family.grandParents) {
+          if (gp.grandFather) familyStudentIds.add(gp.grandFather.toString());
+          if (gp.grandMother) familyStudentIds.add(gp.grandMother.toString());
+          
+          for (const fam of gp.families) {
+            familyStudentIds.add(fam.father.student.toString());
+            familyStudentIds.add(fam.mother.student.toString());
+            
+            for (const child of fam.children) {
+              familyStudentIds.add(child.student.toString());
+            }
+          }
+        }
+        
+        if (familyStudentIds.has(studentIdStr)) {
+          throw new Error(`Student ${studentId} is already in family ${family.title}`);
+        }
+        
+        const grandParentPath = `grandParents.${gpIndex}.families.${familyIndex}.children`;
         
         const childData = {
-          student: new mongoose.Types.ObjectId(assignment.studentId),
-          relationship: assignment.relationship,
-          birthOrder: assignment.birthOrder,
+          student: new mongoose.Types.ObjectId(studentId),
+          relationship,
+          birthOrder,
           addedAt: new Date()
         };
         
         await Family.findByIdAndUpdate(
-          assignment.familyId,
+          familyId,
           {
             $push: {
               [grandParentPath]: childData
@@ -1835,10 +1967,10 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
         
         assignmentResults.push({
           familyTitle: family.title,
-          studentName: `${assignment.student.firstName} ${assignment.student.lastName}`,
           studentId: assignment.student.gibyGubayeId || 'N/A',
-          relationship: assignment.relationship,
-          birthOrder: assignment.birthOrder,
+          studentName: `${assignment.student.firstName} ${assignment.student.lastName}`,
+          relationship,
+          birthOrder,
           addressMatch: assignment.addressMatch,
           diversityScore: assignment.diversityScore
         });
@@ -1846,55 +1978,10 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
       
       await session.commitTransaction();
       
-      // Step 7: Prepare statistics
-      const totalAssigned = assignments.length;
-      const totalFamiliesAffected = new Set(assignments.map(a => a.familyId)).size;
-      const remainingStudents = allAvailableStudents.length; // Students can be reused in other families
-      
-      // Calculate gender distribution
-      const sonsAssigned = assignments.filter(a => a.relationship === 'son').length;
-      const daughtersAssigned = assignments.filter(a => a.relationship === 'daughter').length;
-      
-      // Calculate address match quality for homogeneous mode
-      let matchQuality = 0;
-      if (mode === 'homogeneous') {
-        const exactMatches = assignments.filter(a => a.addressMatch?.includes('Matched')).length;
-        matchQuality = totalAssigned > 0 ? exactMatches / totalAssigned : 0;
-      }
-      
-      // Calculate average diversity score for heterogeneous mode
-      let averageDiversity = 0;
-      if (mode === 'heterogeneous') {
-        const totalScore = assignments.reduce((sum, a) => sum + (a.diversityScore || 0), 0);
-        averageDiversity = totalAssigned > 0 ? totalScore / totalAssigned : 0;
-      }
-      
-      // Get unique students assigned (a student can be assigned to multiple families)
-      const uniqueStudentIds = new Set(assignments.map(a => a.studentId));
-      
       successResponse(res, {
-        success: true,
-        message: `Successfully assigned ${totalAssigned} children to ${totalFamiliesAffected} families (${uniqueStudentIds.size} unique students)`,
-        statistics: {
-          totalAssigned,
-          totalFamiliesAffected,
-          uniqueStudentsAssigned: uniqueStudentIds.size,
-          genderDistribution: {
-            sons: sonsAssigned,
-            daughters: daughtersAssigned,
-            balance: Math.abs(sonsAssigned - daughtersAssigned)
-          },
-          ...(mode === 'homogeneous' ? {
-            addressMatchQuality: matchQuality,
-            qualityLevel: matchQuality >= 0.8 ? 'Excellent' : matchQuality >= 0.5 ? 'Good' : 'Poor'
-          } : {
-            averageDiversityScore: averageDiversity,
-            diversityLevel: averageDiversity >= 3 ? 'High' : averageDiversity >= 2 ? 'Medium' : 'Low'
-          })
-        },
         assignments: assignmentResults,
-        failedAssignments: failedAssignments.length > 0 ? failedAssignments : undefined
-      }, 'Children assigned successfully');
+        message: `Successfully assigned ${assignments.length} children`
+      }, 'Assignments executed successfully');
       
     } catch (error: any) {
       await session.abortTransaction();
@@ -1904,7 +1991,7 @@ export const autoAssignChildren = async (req: Request, res: Response) => {
     }
     
   } catch (error: any) {
-    console.error('Error in autoAssignChildren:', error);
-    errorResponse(res, error.message || 'Failed to auto-assign children', 500);
+    console.error('Error executing assignments:', error);
+    errorResponse(res, error.message || 'Failed to execute assignments', 500);
   }
 };
